@@ -6,13 +6,51 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
 // example to show how to declare the arguments
 // and reply for an RPC.
 //
+
+type GeneralResp struct {
+	err        error     //是否error
+	statusCode int       //调用状态码
+	msg        string    //回复信息
+	resptime   time.Time //消息时间
+}
+
+type JobResp struct {
+	head GeneralResp
+	job  *Job
+}
+
+type ConfigResp struct {
+	head     GeneralResp
+	workerId int
+}
+
+type ResResp struct {
+	head GeneralResp
+	//
+}
+
+type ConfigReq struct {
+	workerName string
+}
+
+type JobReq struct {
+	workerName string
+	workerId   int
+}
+
+type ResReq struct {
+	//
+}
 
 type ExampleArgs struct {
 	X int
@@ -23,7 +61,6 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
