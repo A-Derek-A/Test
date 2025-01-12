@@ -54,7 +54,7 @@ func (c *Coordinator) Register(args *ConfigReq, reply *ConfigResp) error {
 	c.Wlock.Lock()
 	woklen := len(c.Workers)
 	for i := 0; i < woklen; i++ {
-		if args.workerName == c.Workers[i].name {
+		if args.WorkerName == c.Workers[i].name {
 			reply.head.err = registerfail
 			reply.head.msg = "fail to register"
 			reply.head.resptime = time.Now()
@@ -66,7 +66,7 @@ func (c *Coordinator) Register(args *ConfigReq, reply *ConfigResp) error {
 
 	c.Workers = append(c.Workers, Slave{
 		id:       woklen,
-		name:     args.workerName,
+		name:     args.WorkerName,
 		level:    normal,
 		lasttime: time.Now(),
 		crash:    0,
@@ -95,7 +95,7 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 		for i := 0; i < len(c.MapTasks); i++ {
 			if c.ReduceTasks[i].JobStatus == wait || c.ReduceTasks[i].JobStatus == crash {
 				c.MapTasks[i].JobStatus = in_progress  //更改任务运行状态
-				c.MapTasks[i].BelongID = args.workerId //更改任务运行
+				c.MapTasks[i].BelongID = args.WorkerId //更改任务运行
 				c.MapTasks[i].StartTime = time.Now()
 				reply.job = c.MapTasks[i] //分发任务给job
 				reply.head = GeneralResp{
@@ -122,7 +122,7 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 		for i := 0; i < len(c.ReduceTasks); i++ {
 			if c.ReduceTasks[i].JobStatus == wait || c.ReduceTasks[i].JobStatus == crash {
 				c.ReduceTasks[i].JobStatus = in_progress // 1为正在运行 2为产生过错误 3为产生
-				c.ReduceTasks[i].BelongID = args.workerId
+				c.ReduceTasks[i].BelongID = args.WorkerId
 				c.ReduceTasks[i].StartTime = time.Now()
 				reply.job = c.ReduceTasks[i]
 				reply.head = GeneralResp{
@@ -145,9 +145,9 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 		c.Glock.Unlock()
 		return nil
 	} else if c.TaskStage == NotifyS {
-		c.Workers[args.workerId].online = off
+		c.Workers[args.WorkerId].online = off
 		if c.Verbose {
-			util.Info("worker id:%+v, name:%+v offline", args.workerId, args.workerName)
+			util.Info("worker id:%+v, name:%+v offline", args.WorkerId, args.workerName)
 		}
 		reply.head = GeneralResp{
 			err:        nil,

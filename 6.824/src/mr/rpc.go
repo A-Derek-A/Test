@@ -47,25 +47,23 @@ type ConfigResp struct {
 }
 
 type ResResp struct {
-	head GeneralResp
+	Head GeneralResp
 }
 
 type ConfigReq struct {
-	workerName string
+	WorkerName string
 }
 
 type JobReq struct {
-	workerName string
-	workerId   int
+	WorkerName string
+	WorkerId   int
 }
 
 type ResReq struct {
-	jobId      int
-	jobstatus  bool
-	jobType    int
-	outputName string
-	wokerId    int
-	workerName string
+	Task       Job
+	OutputName string
+	WokerId    int
+	WorkerName string
 }
 
 type ExampleArgs struct {

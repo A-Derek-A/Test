@@ -2,11 +2,13 @@ package mr
 
 import (
 	util "6.824/utils"
+	"bufio"
 	"fmt"
 	"io"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 import "log"
@@ -37,6 +39,37 @@ var workerId int
 var name string
 
 var basepath = "../main/mr-tmp/mr-inters"
+var OriginFile = "../main"
+
+func Merge(l1 []KeyValue, l2 []KeyValue) []KeyValue {
+	i := 0
+	j := 0
+	tempList := make([]KeyValue, 0)
+	for i < len(l1) && j < len(l2) {
+		if l1[i].Key < l2[i].Key {
+			tempList = append(tempList, l1[i])
+			i++
+		} else {
+			tempList = append(tempList, l2[j])
+			j++
+		}
+	}
+	for ; i < len(l1); i++ {
+		tempList = append(tempList, l1[i])
+	}
+	for ; j < len(l2); j++ {
+		tempList = append(tempList, l2[j])
+	}
+	return tempList
+}
+
+func Partition(lists [][]KeyValue) []KeyValue {
+	if len(lists) == 1 {
+		return lists[0]
+	}
+	mid := len(lists) >> 1
+	return Merge(Partition(lists[:mid]), Partition(lists[mid:]))
+}
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
@@ -72,17 +105,16 @@ func Worker(mapf func(string, string) []KeyValue,
 			if j != nil {
 				intermediate := make([][]KeyValue, j.ParNum)
 				if j.JobType == MapType {
-					file, err := os.Open(basepath + "/" + j.JobName)
-					defer file.Close()
+					file, err := os.Open(OriginFile + "/" + j.JobName)
 					if err != nil {
-						//util.Error("err: ",err)
-						log.Fatal("err: ", err)
+						util.Error("err: ", err)
+						//log.Fatal("err: ", err)
 					}
 					content, err := io.ReadAll(file)
 					kva := mapf(file.Name(), string(content))
 					if err != nil {
 						util.Error("err: ", err)
-						log.Fatal("err: ", err)
+						//log.Fatal("err: ", err)
 					}
 					for _, v := range kva {
 						parid := ihash(v.Key) % j.ParNum
@@ -95,27 +127,70 @@ func Worker(mapf func(string, string) []KeyValue,
 						newFileName := "mr-mid-" + strconv.Itoa(j.JobId) + "-" + strconv.Itoa(i) + ".txt"
 						newFile, err := os.OpenFile(basepath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
 						if err != nil {
-							log.Fatal("err: ", err)
+							//log.Fatal("err: ", err)
+							util.Error("err: ", err)
 						}
 						for ind := 0; ind < len(intermediate[i]); ind++ {
 							fmt.Fprintf(newFile, "%+v %+v\n", intermediate[i][ind].Key, intermediate[i][ind].Value)
 						}
 						newFile.Close()
 					}
-					SendRes() //wait to deal
+					file.Close()
+					//SendRes() //wait to deal
 				} else if j.JobType == ReduceType {
 					files, err := os.ReadDir(basepath)
 					if err != nil {
-						fmt.Printf("err: ", err)
+						//fmt.Printf("err: ", err)
+						util.Error("err: ", err)
 					}
+
+					tempList := make([]*os.File, 0)
+
 					for _, file := range files {
 						if file.Name()[len(file.Name())-5:] == strconv.Itoa(j.JobId)+".txt" {
-
+							tf, _ := os.Open(basepath + "/" + file.Name())
+							tempList = append(tempList, tf)
 						}
 					}
+					tempKvList := make([][]KeyValue, 0)
+					for _, v := range tempList {
+						fileKvList := make([]KeyValue, 0)
+						scanner := bufio.NewScanner(v)
+						for scanner.Scan() {
+							line := scanner.Text()
+							t := strings.Split(line, " ")
+							//v_int, _:= strconv.ParseInt(t[1], 10, 64)
+							fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
+						}
+						tempKvList = append(tempKvList, fileKvList)
+					}
+					for _, v := range tempList {
+						v.Close()
+					}
+					FinalList := Partition(tempKvList)
+
+					outputFile, err := os.OpenFile("mr-rd-"+strconv.Itoa(j.JobId)+".txt", os.O_WRONLY|os.O_CREATE, 0666)
+					i := 0
+					for i < len(FinalList) {
+						k := i + 1
+						for k < len(FinalList) && FinalList[k].Key == FinalList[i].Key {
+							k++
+						}
+						values := []string{}
+						for k1 := i; k1 < k; k1++ {
+							values = append(values, FinalList[k1].Value)
+						}
+						output := reducef(FinalList[i].Key, values)
+
+						// this is the correct format for each line of Reduce output.
+						fmt.Fprintf(outputFile, "%v %v\n", FinalList[i].Key, output)
+						i = k
+					}
+
 				}
 			}
 		}
+		time.Sleep(time.Second)
 	}
 
 }
@@ -170,8 +245,8 @@ func RegisterNode(name string) bool {
 func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) { //cor 标志是否正确执行 j 是回传的job类 flag 标记是退出主程序
 	args := JobReq{}
 	reply := JobResp{}
-	args.workerId = workerId
-	args.workerName = name
+	args.WorkerId = workerId
+	args.WorkerName = name
 	flag = 0
 	yes := call("Coordinator.ApplyJob", &args, &reply)
 	if yes {
@@ -197,7 +272,10 @@ func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) { //cor �
 	return false, nil, 0
 }
 
-func SendRes() bool {
+func SendRes(workerId int) bool {
+	//args := ResResp{}
+	//reply := ResResp{}
+	//args.
 	return false
 }
 
