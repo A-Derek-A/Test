@@ -60,6 +60,7 @@ type JobReq struct {
 }
 
 type ResReq struct {
+	jobId      int
 	jobstatus  bool
 	jobType    int
 	outputName string

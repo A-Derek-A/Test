@@ -25,6 +25,7 @@ const (
 
 type Coordinator struct {
 	// Your definitions here.
+	PartitionNum    int           //分区数量
 	Filenames       []string      //所有文件名称
 	Intermediates   []string      //中间文件名称
 	Workers         []Slave       //已经注册过的Worker节点
@@ -144,7 +145,7 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 		c.Glock.Unlock()
 		return nil
 	} else if c.TaskStage == NotifyS {
-		c.Workers[args.workerId].online = false
+		c.Workers[args.workerId].online = off
 		if c.Verbose {
 			util.Info("worker id:%+v, name:%+v offline", args.workerId, args.workerName)
 		}
@@ -161,6 +162,27 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 
 func (c *Coordinator) RetRes(args *ResReq, reply *ResResp) error {
 
+	c.Wlock.Lock()
+	c.Workers[workerId].lasttime = time.Now()
+	if args.jobstatus == false {
+		c.Workers[workerId].crash++
+	}
+	c.Wlock.Unlock()
+	if args.jobType == MapType {
+		// wait to fix
+		// 校验该任务当前所属的节点
+		c.Glock.Lock()
+		if args.jobstatus == true {
+			c.MapTasks[args.jobId].JobStatus = finish
+			c.MapTasks[args.jobId].EndTime = time.Now()
+		} else {
+			c.MapTasks[args.jobId].JobStatus = crash
+			//
+		}
+		c.Glock.Unlock()
+	} else if args.jobType == ReduceType {
+
+	}
 	return nil
 }
 
@@ -168,6 +190,8 @@ func (c *Coordinator) loadMapTasks() {
 	c.MapTasksLeft = len(c.Filenames)
 	for i := 0; i < len(c.Filenames); i++ {
 		c.MapTasks = append(c.MapTasks, &Job{
+			ParNum:    c.PartitionNum,
+			JobId:     i,
 			JobStatus: wait,
 			JobName:   c.Filenames[i],
 			JobType:   MapType,
@@ -176,7 +200,15 @@ func (c *Coordinator) loadMapTasks() {
 }
 
 func (c *Coordinator) loadReduceTasks() {
-
+	for i := 0; i < c.PartitionNum; i++ {
+		c.ReduceTasks = append(c.ReduceTasks, &Job{
+			ParNum:    c.PartitionNum,
+			JobId:     i,
+			JobStatus: wait,
+			JobName:   "reduce partition",
+			JobType:   ReduceType,
+		})
+	}
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -206,15 +238,16 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
+		PartitionNum:    nReduce,
 		Filenames:       files,
 		Intermediates:   make([]string, 0),
 		Workers:         make([]Slave, 0),
 		Verbose:         true,
-		TaskStage:       1,
+		TaskStage:       MapS,
 		MapTasksLeft:    len(files),
 		MapTasks:        make([]*Job, 0),
 		ReduceTasks:     make([]*Job, 0),
-		ReduceTasksLeft: 0,
+		ReduceTasksLeft: nReduce,
 		Ginfo:           StatisticInfo{0, 0},
 	}
 	c.loadMapTasks()
@@ -262,10 +295,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 				c.Wlock.Unlock()
 				if cnt == 0 {
 					c.TaskStage = CloseS
+					break
 				}
 			}
+			time.Sleep(2 * time.Second)
 		}
-		time.Sleep(time.Second)
 	}(&c)
 
 	c.server()

@@ -3,7 +3,9 @@ package mr
 import (
 	util "6.824/utils"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -17,6 +19,12 @@ type KeyValue struct {
 	Value string
 }
 
+type ByKey []KeyValue
+
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 func ihash(key string) int {
@@ -28,7 +36,7 @@ func ihash(key string) int {
 var workerId int
 var name string
 
-var basepath = "../main/mr-tmp/"
+var basepath = "../main/mr-tmp/mr-inters"
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
@@ -46,10 +54,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	//调用中或完成时统计信息
 	//将中间结果写入文件
 	//利用rpc向master汇报任务情况
-	_, err := os.Stat(basepath + "mr-inters/")
+	_, err := os.Stat(basepath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			os.Mkdir(basepath+"mr-inters", 0755)
+			os.Mkdir(basepath, 0755)
 		}
 	}
 	name = strconv.Itoa(os.Getpid())
@@ -62,10 +70,49 @@ func Worker(mapf func(string, string) []KeyValue,
 				return
 			}
 			if j != nil {
+				intermediate := make([][]KeyValue, j.ParNum)
 				if j.JobType == MapType {
-					//file, err = os.Open()
+					file, err := os.Open(basepath + "/" + j.JobName)
+					defer file.Close()
+					if err != nil {
+						//util.Error("err: ",err)
+						log.Fatal("err: ", err)
+					}
+					content, err := io.ReadAll(file)
+					kva := mapf(file.Name(), string(content))
+					if err != nil {
+						util.Error("err: ", err)
+						log.Fatal("err: ", err)
+					}
+					for _, v := range kva {
+						parid := ihash(v.Key) % j.ParNum
+						intermediate[parid] = append(intermediate[parid], v)
+					}
+					for i := 0; i < len(intermediate); i++ {
+						sort.Sort(ByKey(intermediate[i]))
+					}
+					for i := 0; i < len(intermediate); i++ {
+						newFileName := "mr-mid-" + strconv.Itoa(j.JobId) + "-" + strconv.Itoa(i) + ".txt"
+						newFile, err := os.OpenFile(basepath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
+						if err != nil {
+							log.Fatal("err: ", err)
+						}
+						for ind := 0; ind < len(intermediate[i]); ind++ {
+							fmt.Fprintf(newFile, "%+v %+v\n", intermediate[i][ind].Key, intermediate[i][ind].Value)
+						}
+						newFile.Close()
+					}
+					SendRes() //wait to deal
 				} else if j.JobType == ReduceType {
+					files, err := os.ReadDir(basepath)
+					if err != nil {
+						fmt.Printf("err: ", err)
+					}
+					for _, file := range files {
+						if file.Name()[len(file.Name())-5:] == strconv.Itoa(j.JobId)+".txt" {
 
+						}
+					}
 				}
 			}
 		}
@@ -120,7 +167,7 @@ func RegisterNode(name string) bool {
 	return false
 }
 
-func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) {
+func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) { //cor 标志是否正确执行 j 是回传的job类 flag 标记是退出主程序
 	args := JobReq{}
 	reply := JobResp{}
 	args.workerId = workerId
