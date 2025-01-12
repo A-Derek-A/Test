@@ -17,6 +17,18 @@ import "strconv"
 // and reply for an RPC.
 //
 
+const (
+	ok      = 200 //代表任务成功
+	mistake = 300 //代表产生错误
+	nojob   = 400 //暂时没有工作，请等待
+	exit    = 500 //请退出程序
+
+	MapOk    = "Apply Map Task Success."
+	ReduceOk = "Apply Reduce Task Success."
+	Notask   = "Please wait for a new job"
+	Shutdonw = "Please shut down."
+)
+
 type GeneralResp struct {
 	err        error     //是否error
 	statusCode int       //调用状态码
@@ -36,7 +48,6 @@ type ConfigResp struct {
 
 type ResResp struct {
 	head GeneralResp
-	//
 }
 
 type ConfigReq struct {
@@ -49,7 +60,11 @@ type JobReq struct {
 }
 
 type ResReq struct {
-	//
+	jobstatus  bool
+	jobType    int
+	outputName string
+	wokerId    int
+	workerName string
 }
 
 type ExampleArgs struct {

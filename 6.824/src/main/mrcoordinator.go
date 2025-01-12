@@ -9,9 +9,11 @@ package main
 // Please do not change this file.
 //
 
-import "6.824/mr"
-import "time"
-import "os"
+import (
+	"6.824/mr"
+	"os"
+	"time"
+)
 import "fmt"
 
 func main() {
@@ -24,6 +26,7 @@ func main() {
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}
+	//fmt.Println(os.Args[1:])
 
 	time.Sleep(time.Second)
 }

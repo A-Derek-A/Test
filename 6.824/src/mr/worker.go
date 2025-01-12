@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -25,6 +26,9 @@ func ihash(key string) int {
 }
 
 var workerId int
+var name string
+
+var basepath = "../main/mr-tmp/"
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
@@ -42,12 +46,29 @@ func Worker(mapf func(string, string) []KeyValue,
 	//调用中或完成时统计信息
 	//将中间结果写入文件
 	//利用rpc向master汇报任务情况
+	_, err := os.Stat(basepath + "mr-inters/")
+	if err != nil {
+		if os.IsNotExist(err) {
+			os.Mkdir(basepath+"mr-inters", 0755)
+		}
+	}
+	name = strconv.Itoa(os.Getpid())
 
-	pid := os.Getpid()
-
-	RegisterNode(strconv.Itoa(pid))
+	RegisterNode(name)
 	for {
-		ApplyTask(workerId, strconv.Itoa(pid))
+		cor, j, f := ApplyTask(workerId, name)
+		if cor == true {
+			if f == 1 {
+				return
+			}
+			if j != nil {
+				if j.JobType == MapType {
+					//file, err = os.Open()
+				} else if j.JobType == ReduceType {
+
+				}
+			}
+		}
 	}
 
 }
@@ -70,8 +91,8 @@ func CallExample() {
 	// the "Coordinator.Example" tells the
 	// receiving server that we'd like to call
 	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
+	yes := call("Coordinator.Example", &args, &reply)
+	if yes {
 		// reply.Y should be 100.
 		fmt.Printf("reply.Y %v\n", reply.Y)
 	} else {
@@ -83,15 +104,15 @@ func RegisterNode(name string) bool {
 	args := ConfigReq{name}
 	reply := ConfigResp{}
 
-	ok := call("Coordinator.Register", &args, &reply)
-	if ok {
-		if reply.head.statusCode != 1 {
-			util.Error(reply.head.msg)
-			return false
-		} else {
+	yes := call("Coordinator.Register", &args, &reply)
+	if yes {
+		if reply.head.statusCode == ok {
 			util.Success(reply.head.msg, "worker id: ", reply.workerId)
 			workerId = reply.workerId
 			return true
+		} else if reply.head.statusCode == mistake {
+			util.Error(reply.head.msg)
+			return false
 		}
 	} else {
 		fmt.Printf("call registernode failed!\n")
@@ -99,25 +120,34 @@ func RegisterNode(name string) bool {
 	return false
 }
 
-func ApplyTask(workerId int, name string) (b bool, j *Job) {
+func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) {
 	args := JobReq{}
 	reply := JobResp{}
 	args.workerId = workerId
 	args.workerName = name
-	ok := call("Coordinator.ApplyJob", &args, &reply)
-	if ok {
-		//if reply.head.statusCode != 1 {
-		//	util.Error(reply.head.msg)
-		//	return false
-		//} else {
-		//	util.Success(reply.head.msg, "worker id: ", reply.workerId)
-		//	workerId = reply.workerId
-		//	return true
-		//}
+	flag = 0
+	yes := call("Coordinator.ApplyJob", &args, &reply)
+	if yes {
+		if reply.head.statusCode == ok {
+			j = reply.job
+			cor = true
+			util.Success("worker %+v: %+v", name, reply.head.msg)
+			return cor, j, flag
+		} else if reply.head.statusCode == nojob {
+			j = nil
+			cor = true
+			util.Info("worker %+v: %+v", name, reply.head.msg)
+			time.Sleep(time.Second)
+			return cor, j, flag
+		} else if reply.head.statusCode == exit {
+			return true, nil, 1
+		} else if reply.head.statusCode == mistake {
+			util.Error("worker %+v: %+v", name, reply.head.msg)
+		}
 	} else {
 		fmt.Printf("call applytask failed!\n")
 	}
-	return false, nil
+	return false, nil, 0
 }
 
 func SendRes() bool {

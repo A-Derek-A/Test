@@ -4,6 +4,19 @@ import (
 	"time"
 )
 
+const (
+	fatal     = 1
+	bad       = 2
+	normal    = 3
+	good      = 4
+	excellent = 5
+)
+
+const (
+	on  = true
+	off = false
+)
+
 type Slave struct {
 	id       int       //节点的ID
 	name     string    //节点的名字
