@@ -25,6 +25,7 @@ const (
 
 type Coordinator struct {
 	// Your definitions here.
+	FinalMerge      bool          //最终的合并
 	PartitionNum    int           //分区数量
 	Filenames       []string      //所有文件名称
 	Intermediates   []string      //中间文件名称
@@ -52,110 +53,115 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) Register(args *ConfigReq, reply *ConfigResp) error {
 	c.Wlock.Lock()
+	defer c.Wlock.Unlock()
 	woklen := len(c.Workers)
 	for i := 0; i < woklen; i++ {
-		if args.WorkerName == c.Workers[i].name {
-			reply.head.err = registerfail
-			reply.head.msg = "fail to register"
-			reply.head.resptime = time.Now()
-			reply.head.statusCode = 0
-			reply.workerId = -1
+		if args.WorkerName == c.Workers[i].Name {
+			reply.Head.Err = registerfail
+			reply.Head.Msg = "fail to register"
+			reply.Head.Resptime = time.Now()
+			reply.Head.StatusCode = 0
+			reply.WorkerId = -1
 			return nil
 		}
 	}
 
 	c.Workers = append(c.Workers, Slave{
-		id:       woklen,
-		name:     args.WorkerName,
-		level:    normal,
-		lasttime: time.Now(),
-		crash:    0,
-		online:   true,
+		Id:       woklen,
+		Name:     args.WorkerName,
+		Level:    Normal,
+		LastTime: time.Now(),
+		Crash:    0,
+		Online:   true,
 	})
-	c.Wlock.Unlock()
+
+	util.Info("woklen : %+v", woklen)
 
 	if c.Verbose {
 		util.Info("Register a new worker")
 	}
 
-	reply.head = GeneralResp{
-		err:        nil,
-		msg:        "Success",
-		resptime:   c.Workers[woklen].lasttime,
-		statusCode: ok,
+	reply.Head = GeneralResp{
+		Err:        nil,
+		Msg:        "Success",
+		Resptime:   c.Workers[woklen].LastTime,
+		StatusCode: Ok,
 	}
-	reply.workerId = c.Workers[woklen].id
+	reply.WorkerId = c.Workers[woklen].Id
 
 	return nil
 }
 
 func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
+	c.Glock.Lock()
+	defer c.Glock.Unlock()
 	if c.TaskStage == MapS {
-		c.Glock.Lock()
+		util.Info("func Applyjob---map job number: ", len(c.ReduceTasks))
 		for i := 0; i < len(c.MapTasks); i++ {
-			if c.ReduceTasks[i].JobStatus == wait || c.ReduceTasks[i].JobStatus == crash {
-				c.MapTasks[i].JobStatus = in_progress  //更改任务运行状态
+			if c.MapTasks[i].JobStatus == Wait || c.MapTasks[i].JobStatus == Crash {
+				util.Info("func ApplyJob---task num: %d, task status", i, c.MapTasks[i].JobStatus)
+				c.MapTasks[i].JobStatus = InProgress   //更改任务运行状态
 				c.MapTasks[i].BelongID = args.WorkerId //更改任务运行
 				c.MapTasks[i].StartTime = time.Now()
-				reply.job = c.MapTasks[i] //分发任务给job
-				reply.head = GeneralResp{
-					err:        nil,
-					statusCode: ok,
-					msg:        MapOk,
-					resptime:   time.Now(),
+				reply.Task = c.MapTasks[i] //分发任务给job
+				reply.Head = GeneralResp{
+					Err:        nil,
+					StatusCode: Ok,
+					Msg:        MapOk,
+					Resptime:   time.Now(),
 				}
-				c.Glock.Unlock()
+
 				return nil
 			}
 		}
-		reply.job = nil
-		reply.head = GeneralResp{
-			err:        nil,
-			statusCode: nojob,
-			msg:        Notask,
-			resptime:   time.Now(),
+		reply.Task = nil
+		reply.Head = GeneralResp{
+			Err:        nil,
+			StatusCode: Nojob,
+			Msg:        Notask,
+			Resptime:   time.Now(),
 		}
-		c.Glock.Unlock()
+
 		return nil
 	} else if c.TaskStage == ReduceS {
-		c.Glock.Lock()
+
 		for i := 0; i < len(c.ReduceTasks); i++ {
-			if c.ReduceTasks[i].JobStatus == wait || c.ReduceTasks[i].JobStatus == crash {
-				c.ReduceTasks[i].JobStatus = in_progress // 1为正在运行 2为产生过错误 3为产生
+			if c.ReduceTasks[i].JobStatus == Wait || c.ReduceTasks[i].JobStatus == Crash {
+				c.ReduceTasks[i].JobStatus = InProgress // 1为正在运行 2为产生过错误 3为产生
 				c.ReduceTasks[i].BelongID = args.WorkerId
 				c.ReduceTasks[i].StartTime = time.Now()
-				reply.job = c.ReduceTasks[i]
-				reply.head = GeneralResp{
-					err:        nil,
-					statusCode: ok,
-					msg:        ReduceOk,
-					resptime:   time.Now(),
+				reply.Task = c.ReduceTasks[i]
+				reply.Head = GeneralResp{
+					Err:        nil,
+					StatusCode: Ok,
+					Msg:        ReduceOk,
+					Resptime:   time.Now(),
 				}
-				c.Glock.Unlock()
+
 				return nil
 			}
 		}
-		reply.job = nil
-		reply.head = GeneralResp{
-			err:        nil,
-			statusCode: nojob,
-			msg:        Notask,
-			resptime:   time.Now(),
+		reply.Task = nil
+		reply.Head = GeneralResp{
+			Err:        nil,
+			StatusCode: Nojob,
+			Msg:        Notask,
+			Resptime:   time.Now(),
 		}
-		c.Glock.Unlock()
+
 		return nil
 	} else if c.TaskStage == NotifyS {
-		c.Workers[args.WorkerId].online = off
+		c.Workers[args.WorkerId].Online = Off
 		if c.Verbose {
-			util.Info("worker id:%+v, name:%+v offline", args.WorkerId, args.workerName)
+			util.Info("worker id:%+v, name:%+v offline", args.WorkerId, args.WorkerName)
 		}
-		reply.head = GeneralResp{
-			err:        nil,
-			statusCode: exit,
-			msg:        Shutdonw,
-			resptime:   time.Now(),
+		reply.Head = GeneralResp{
+			Err:        nil,
+			StatusCode: Exit,
+			Msg:        Shutdonw,
+			Resptime:   time.Now(),
 		}
-		reply.job = nil
+		reply.Task = nil
 	}
 	return nil
 }
@@ -163,25 +169,34 @@ func (c *Coordinator) ApplyJob(args *JobReq, reply *JobResp) error {
 func (c *Coordinator) RetRes(args *ResReq, reply *ResResp) error {
 
 	c.Wlock.Lock()
-	c.Workers[workerId].lasttime = time.Now()
-	if args.jobstatus == false {
-		c.Workers[workerId].crash++
+	util.Info("worker: %d", args.WorkerId)
+	c.Workers[workerId].LastTime = time.Now()
+	if args.Task.JobStatus == Crash {
+		c.Workers[workerId].Crash++
 	}
 	c.Wlock.Unlock()
-	if args.jobType == MapType {
-		// wait to fix
+	if args.Task.JobType == MapType {
+		// Wait to fix
 		// 校验该任务当前所属的节点
+		util.Info("TaskReturn---work status: %d", args.Task.JobStatus)
 		c.Glock.Lock()
-		if args.jobstatus == true {
-			c.MapTasks[args.jobId].JobStatus = finish
-			c.MapTasks[args.jobId].EndTime = time.Now()
+		if args.Task.JobStatus == Finish {
+			c.MapTasks[args.Task.JobId].JobStatus = Finish
+			c.MapTasks[args.Task.JobId].EndTime = time.Now()
 		} else {
-			c.MapTasks[args.jobId].JobStatus = crash
+			c.MapTasks[args.Task.JobId].JobStatus = Crash
 			//
 		}
 		c.Glock.Unlock()
-	} else if args.jobType == ReduceType {
-
+	} else if args.Task.JobType == ReduceType {
+		c.Glock.Lock()
+		if args.Task.JobStatus == Finish {
+			c.ReduceTasks[args.Task.JobId].JobStatus = Finish
+			c.ReduceTasks[args.Task.JobId].EndTime = time.Now()
+		} else {
+			c.ReduceTasks[args.Task.JobId].JobStatus = Crash
+		}
+		c.Glock.Unlock()
 	}
 	return nil
 }
@@ -192,7 +207,7 @@ func (c *Coordinator) loadMapTasks() {
 		c.MapTasks = append(c.MapTasks, &Job{
 			ParNum:    c.PartitionNum,
 			JobId:     i,
-			JobStatus: wait,
+			JobStatus: Wait,
 			JobName:   c.Filenames[i],
 			JobType:   MapType,
 		})
@@ -204,7 +219,7 @@ func (c *Coordinator) loadReduceTasks() {
 		c.ReduceTasks = append(c.ReduceTasks, &Job{
 			ParNum:    c.PartitionNum,
 			JobId:     i,
-			JobStatus: wait,
+			JobStatus: Wait,
 			JobName:   "reduce partition",
 			JobType:   ReduceType,
 		})
@@ -228,7 +243,11 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	c.Glock.Lock()
 	ret := c.TaskStage == CloseS
+	util.Info("ret: ", ret)
+
+	c.Glock.Unlock()
 	// Your code here.
 	return ret
 }
@@ -238,6 +257,7 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
+		FinalMerge:      true,
 		PartitionNum:    nReduce,
 		Filenames:       files,
 		Intermediates:   make([]string, 0),
@@ -255,52 +275,117 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	go func(c *Coordinator) {
 		for {
+			c.Glock.Lock()
 			if c.TaskStage == MapS {
-				c.Glock.Lock()
 				cnt := 0
 				for i := 0; i < len(c.MapTasks); i++ {
-					if c.MapTasks[i].JobStatus == finish {
+					if c.MapTasks[i].JobStatus == Finish {
 						continue
 					}
 					cnt++
 				}
 				c.MapTasksLeft = cnt
-				c.Glock.Unlock()
 				if c.MapTasksLeft == 0 {
 					c.loadReduceTasks()
 					c.TaskStage = ReduceS
 				}
+				//modified Lock
 			} else if c.TaskStage == ReduceS {
-				c.Glock.Lock()
+				util.Info("We are in the Reduce Stage !!!!")
 				cnt := 0
 				for i := 0; i < len(c.ReduceTasks); i++ {
-					if c.ReduceTasks[i].JobStatus == finish {
+					if c.ReduceTasks[i].JobStatus == Finish {
 						continue
 					}
 					cnt++
 				}
 				c.ReduceTasksLeft = cnt
-				c.Glock.Unlock()
+				util.Info("go monitor func : Reduce Task Left: ", c.ReduceTasksLeft)
 				if c.ReduceTasksLeft == 0 {
 					c.TaskStage = NotifyS
 				}
 			} else if c.TaskStage == NotifyS {
+				util.Info("We are in the Notify Stage !!!!")
 				c.Wlock.Lock()
 				cnt := 0
 				for i := 0; i < len(c.Workers); i++ {
-					if c.Workers[i].online == on {
+					if c.Workers[i].Online == On {
 						cnt++
 					}
 				}
 				c.Wlock.Unlock()
-				if cnt == 0 {
+				util.Info("online worker number: ", cnt)
+				if cnt == 0 && c.FinalMerge {
 					c.TaskStage = CloseS
-					break
 				}
+
 			}
+			c.Glock.Unlock()
 			time.Sleep(2 * time.Second)
 		}
 	}(&c)
+
+	//go func(c *Coordinator) {
+	//	if c.TaskStage == NotifyS {
+	//
+	//
+	//		//准备一个Reduce输出的列表
+	//		tempList := make([]*os.File, 0)
+	//
+	//		//for _, file := range files {
+	//		//	if file.Name()[len(file.Name())-5:] == strconv.Itoa(j.JobId)+".txt" {
+	//		//		tf, _ := os.Open(BasePath + "/" + file.Name())
+	//		//		tempList = append(tempList, tf)
+	//		//	}
+	//		//}
+	//
+	//		for i := 0; i < c.PartitionNum; i++{
+	//			tf, err := os.Open(FinalReducePath + "/" + "mr-rd-" + strconv.Itoa(i) + ".txt")
+	//			if err != nil{
+	//				util.Error("file can't open.")
+	//			}
+	//			tempList = append(tempList, tf)
+	//		}
+	//
+	//
+	//		tempKvList := make([][]KeyValue, 0)
+	//		for _, v := range tempList {
+	//			fileKvList := make([]KeyValue, 0)
+	//			scanner := bufio.NewScanner(v)
+	//			for scanner.Scan() {
+	//				line := scanner.Text()
+	//				t := strings.Split(line, " ")
+	//				if len(t) > 1{
+	//					fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
+	//				}
+	//				//v_int, _:= strconv.ParseInt(t[1], 10, 64)
+	//			}
+	//			tempKvList = append(tempKvList, fileKvList)
+	//		}
+	//		for _, v := range tempList {
+	//			v.Close()
+	//		}
+	//		FinalList := Partition(tempKvList)
+	//
+	//		outputFile, err := os.OpenFile("mr-rd-"+strconv.Itoa(j.JobId)+".txt", os.O_WRONLY|os.O_CREATE, 0666)
+	//		i := 0
+	//		for i < len(FinalList) {
+	//			k := i + 1
+	//			for k < len(FinalList) && FinalList[k].Key == FinalList[i].Key {
+	//				k++
+	//			}
+	//			values := []string{}
+	//			for k1 := i; k1 < k; k1++ {
+	//				values = append(values, FinalList[k1].Value)
+	//			}
+	//			output := reducef(FinalList[i].Key, values)
+	//
+	//			// this is the correct format for each line of Reduce output.
+	//			fmt.Fprintf(outputFile, "%v %v\n", FinalList[i].Key, output)
+	//			i = k
+	//		}
+	//	}
+	//}(&c)
 
 	c.server()
 	return &c

@@ -38,15 +38,16 @@ func ihash(key string) int {
 var workerId int
 var name string
 
-var basepath = "../main/mr-tmp/mr-inters"
-var OriginFile = "../main"
+var BasePath = "./mr-inters"
+var OriginFile = ""
+var FinalReducePath = "../main/mr-tmp"
 
 func Merge(l1 []KeyValue, l2 []KeyValue) []KeyValue {
 	i := 0
 	j := 0
 	tempList := make([]KeyValue, 0)
 	for i < len(l1) && j < len(l2) {
-		if l1[i].Key < l2[i].Key {
+		if l1[i].Key < l2[j].Key {
 			tempList = append(tempList, l1[i])
 			i++
 		} else {
@@ -87,17 +88,16 @@ func Worker(mapf func(string, string) []KeyValue,
 	//调用中或完成时统计信息
 	//将中间结果写入文件
 	//利用rpc向master汇报任务情况
-	_, err := os.Stat(basepath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			os.Mkdir(basepath, 0755)
-		}
-	}
+	os.Mkdir("mr-inters", 0777)
 	name = strconv.Itoa(os.Getpid())
 
 	RegisterNode(name)
+
 	for {
 		cor, j, f := ApplyTask(workerId, name)
+		if j != nil {
+			util.Info("job info:", j.ParNum, j.JobStatus, j.JobId, j.JobName, j.JobType)
+		}
 		if cor == true {
 			if f == 1 {
 				return
@@ -105,11 +105,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			if j != nil {
 				intermediate := make([][]KeyValue, j.ParNum)
 				if j.JobType == MapType {
-					file, err := os.Open(OriginFile + "/" + j.JobName)
+					//OriginFile + "/" +
+					file, err := os.Open(j.JobName)
 					if err != nil {
 						util.Error("err: ", err)
 						//log.Fatal("err: ", err)
 					}
+
 					content, err := io.ReadAll(file)
 					kva := mapf(file.Name(), string(content))
 					if err != nil {
@@ -125,7 +127,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 					for i := 0; i < len(intermediate); i++ {
 						newFileName := "mr-mid-" + strconv.Itoa(j.JobId) + "-" + strconv.Itoa(i) + ".txt"
-						newFile, err := os.OpenFile(basepath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
+						newFile, err := os.OpenFile(BasePath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
 						if err != nil {
 							//log.Fatal("err: ", err)
 							util.Error("err: ", err)
@@ -136,9 +138,10 @@ func Worker(mapf func(string, string) []KeyValue,
 						newFile.Close()
 					}
 					file.Close()
-					//SendRes() //wait to deal
+					SendRes(name, workerId, "", j) //Wait to deal
 				} else if j.JobType == ReduceType {
-					files, err := os.ReadDir(basepath)
+
+					files, err := os.ReadDir(BasePath)
 					if err != nil {
 						//fmt.Printf("err: ", err)
 						util.Error("err: ", err)
@@ -148,7 +151,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 					for _, file := range files {
 						if file.Name()[len(file.Name())-5:] == strconv.Itoa(j.JobId)+".txt" {
-							tf, _ := os.Open(basepath + "/" + file.Name())
+							tf, _ := os.Open(BasePath + "/" + file.Name())
 							tempList = append(tempList, tf)
 						}
 					}
@@ -159,8 +162,10 @@ func Worker(mapf func(string, string) []KeyValue,
 						for scanner.Scan() {
 							line := scanner.Text()
 							t := strings.Split(line, " ")
+							if len(t) > 1 {
+								fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
+							}
 							//v_int, _:= strconv.ParseInt(t[1], 10, 64)
-							fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
 						}
 						tempKvList = append(tempKvList, fileKvList)
 					}
@@ -168,8 +173,12 @@ func Worker(mapf func(string, string) []KeyValue,
 						v.Close()
 					}
 					FinalList := Partition(tempKvList)
-
-					outputFile, err := os.OpenFile("mr-rd-"+strconv.Itoa(j.JobId)+".txt", os.O_WRONLY|os.O_CREATE, 0666)
+					//FinalReducePath+"/"+
+					outputFile, err := os.OpenFile("mr-out-"+strconv.Itoa(j.JobId), os.O_WRONLY|os.O_CREATE, 0666)
+					if err != nil {
+						util.Error("Worker---Reduce---error: ", err)
+					}
+					util.Info("Worker---Reduce---output: ", outputFile.Name())
 					i := 0
 					for i < len(FinalList) {
 						k := i + 1
@@ -186,11 +195,12 @@ func Worker(mapf func(string, string) []KeyValue,
 						fmt.Fprintf(outputFile, "%v %v\n", FinalList[i].Key, output)
 						i = k
 					}
-
+					SendRes(name, workerId, outputFile.Name(), j)
+					outputFile.Close()
 				}
 			}
 		}
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
 	}
 
 }
@@ -209,7 +219,7 @@ func CallExample() {
 	// declare a reply structure.
 	reply := ExampleReply{}
 
-	// send the RPC request, wait for the reply.
+	// send the RPC request, Wait for the reply.
 	// the "Coordinator.Example" tells the
 	// receiving server that we'd like to call
 	// the Example() method of struct Coordinator.
@@ -227,13 +237,14 @@ func RegisterNode(name string) bool {
 	reply := ConfigResp{}
 
 	yes := call("Coordinator.Register", &args, &reply)
+	util.Info(reply.Head.Msg)
 	if yes {
-		if reply.head.statusCode == ok {
-			util.Success(reply.head.msg, "worker id: ", reply.workerId)
-			workerId = reply.workerId
+		if reply.Head.StatusCode == Ok {
+			util.Success(reply.Head.Msg, "worker id: ", reply.WorkerId)
+			workerId = reply.WorkerId
 			return true
-		} else if reply.head.statusCode == mistake {
-			util.Error(reply.head.msg)
+		} else if reply.Head.StatusCode == Mistake {
+			util.Error(reply.Head.Msg)
 			return false
 		}
 	} else {
@@ -250,21 +261,22 @@ func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) { //cor �
 	flag = 0
 	yes := call("Coordinator.ApplyJob", &args, &reply)
 	if yes {
-		if reply.head.statusCode == ok {
-			j = reply.job
+		if reply.Head.StatusCode == Ok {
+			j = reply.Task
 			cor = true
-			util.Success("worker %+v: %+v", name, reply.head.msg)
+			util.Success("worker %+v: %+v", name, reply.Head.Msg)
 			return cor, j, flag
-		} else if reply.head.statusCode == nojob {
+		} else if reply.Head.StatusCode == Nojob {
 			j = nil
 			cor = true
-			util.Info("worker %+v: %+v", name, reply.head.msg)
+			util.Info("worker %+v: %+v", name, reply.Head.Msg)
 			time.Sleep(time.Second)
 			return cor, j, flag
-		} else if reply.head.statusCode == exit {
+		} else if reply.Head.StatusCode == Exit {
 			return true, nil, 1
-		} else if reply.head.statusCode == mistake {
-			util.Error("worker %+v: %+v", name, reply.head.msg)
+		} else if reply.Head.StatusCode == Mistake {
+			util.Error("worker %+v: %+v", name, reply.Head.Msg)
+			return false, nil, 0
 		}
 	} else {
 		fmt.Printf("call applytask failed!\n")
@@ -272,14 +284,31 @@ func ApplyTask(workerId int, name string) (cor bool, j *Job, flag int) { //cor �
 	return false, nil, 0
 }
 
-func SendRes(workerId int) bool {
-	//args := ResResp{}
-	//reply := ResResp{}
-	//args.
+func SendRes(WorkName string, WorkerId int, outputfile string, Task *Job) bool {
+	Task.JobStatus = Finish
+	args := ResReq{
+		Task:       Task,
+		OutputName: outputfile,
+		WorkerId:   WorkerId,
+		WorkerName: WorkName,
+	}
+	reply := ResResp{}
+	yes := call("Coordinator.RetRes", &args, &reply)
+	if yes {
+		if reply.Head.StatusCode == Ok {
+			util.Success(reply.Head.Msg)
+			return true
+		} else if reply.Head.StatusCode == Mistake {
+			util.Error(reply.Head.Msg)
+			return false
+		}
+	} else {
+		fmt.Printf("call applytask failed!\n")
+	}
 	return false
 }
 
-// send an RPC request to the coordinator, wait for the response.
+// send an RPC request to the coordinator, Wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {

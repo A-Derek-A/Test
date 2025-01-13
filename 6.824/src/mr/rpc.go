@@ -18,32 +18,33 @@ import "strconv"
 //
 
 const (
-	ok      = 200 //代表任务成功
-	mistake = 300 //代表产生错误
-	nojob   = 400 //暂时没有工作，请等待
-	exit    = 500 //请退出程序
+	Ok      = 200 //代表任务成功
+	Mistake = 300 //代表产生错误
+	Nojob   = 400 //暂时没有工作，请等待
+	Exit    = 500 //请退出程序
 
 	MapOk    = "Apply Map Task Success."
 	ReduceOk = "Apply Reduce Task Success."
-	Notask   = "Please wait for a new job"
+	Notask   = "Please Wait for a new job"
 	Shutdonw = "Please shut down."
+	Success  = "Mission complete."
 )
 
 type GeneralResp struct {
-	err        error     //是否error
-	statusCode int       //调用状态码
-	msg        string    //回复信息
-	resptime   time.Time //消息时间
+	Err        error     //是否error
+	StatusCode int       //调用状态码
+	Msg        string    //回复信息
+	Resptime   time.Time //消息时间
 }
 
 type JobResp struct {
-	head GeneralResp
-	job  *Job
+	Head GeneralResp
+	Task *Job
 }
 
 type ConfigResp struct {
-	head     GeneralResp
-	workerId int
+	Head     GeneralResp
+	WorkerId int
 }
 
 type ResResp struct {
@@ -60,9 +61,9 @@ type JobReq struct {
 }
 
 type ResReq struct {
-	Task       Job
+	Task       *Job
 	OutputName string
-	WokerId    int
+	WorkerId   int
 	WorkerName string
 }
 

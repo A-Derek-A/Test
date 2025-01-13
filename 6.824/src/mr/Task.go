@@ -5,10 +5,10 @@ import (
 )
 
 const (
-	wait        = 0
-	in_progress = 1
-	crash       = 2
-	finish      = 3
+	Wait       = 0
+	InProgress = 1
+	Crash      = 2
+	Finish     = 3
 
 	MapType    = 1
 	ReduceType = 2
