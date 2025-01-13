@@ -91,7 +91,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	os.Mkdir("mr-inters", 0777)
 	name = strconv.Itoa(os.Getpid())
 
-	RegisterNode(name)
+	yes := RegisterNode(name)
+	if yes == false {
+		return
+	}
 
 	for {
 		cor, j, f := ApplyTask(workerId, name)
@@ -210,7 +213,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				}
 			}
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 
 }
@@ -255,6 +258,9 @@ func RegisterNode(name string) bool {
 			return true
 		} else if reply.Head.StatusCode == Mistake {
 			util.Error(reply.Head.Msg)
+			return false
+		} else if reply.Head.StatusCode == Deny {
+			util.Info(reply.Head.Msg)
 			return false
 		}
 	} else {

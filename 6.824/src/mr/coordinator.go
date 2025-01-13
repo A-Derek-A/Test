@@ -52,6 +52,20 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) Register(args *ConfigReq, reply *ConfigResp) error {
+	c.Glock.Lock()
+	if c.TaskStage == NotifyS || c.TaskStage == CloseS {
+		reply.WorkerId = -1
+		reply.Head = GeneralResp{
+			Err:        nil,
+			StatusCode: Deny,
+			Msg:        Refuse,
+			Resptime:   time.Now(),
+		}
+		c.Glock.Unlock()
+		return nil
+	}
+	c.Glock.Unlock()
+
 	c.Wlock.Lock()
 	defer c.Wlock.Unlock()
 	woklen := len(c.Workers)
@@ -88,7 +102,6 @@ func (c *Coordinator) Register(args *ConfigReq, reply *ConfigResp) error {
 		StatusCode: Ok,
 	}
 	reply.WorkerId = c.Workers[woklen].Id
-
 	return nil
 }
 
@@ -210,6 +223,7 @@ func (c *Coordinator) loadMapTasks() {
 			JobStatus: Wait,
 			JobName:   c.Filenames[i],
 			JobType:   MapType,
+			StartTime: time.Time{},
 		})
 	}
 }
@@ -222,6 +236,7 @@ func (c *Coordinator) loadReduceTasks() {
 			JobStatus: Wait,
 			JobName:   "reduce partition",
 			JobType:   ReduceType,
+			StartTime: time.Time{},
 		})
 	}
 }
@@ -281,6 +296,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 				for i := 0; i < len(c.MapTasks); i++ {
 					if c.MapTasks[i].JobStatus == Finish {
 						continue
+					} else if (!c.MapTasks[i].StartTime.Equal(time.Time{})) && time.Since(c.MapTasks[i].StartTime) > time.Second*5 {
+						c.MapTasks[i].JobStatus = Crash
+						c.Wlock.Lock()
+						if len(c.Workers) > 0 {
+							util.Error("MapStage---BelongId: %d", c.MapTasks[i].BelongID)
+							c.Workers[c.MapTasks[i].BelongID].Online = Off
+						}
+						c.Wlock.Unlock()
 					}
 					cnt++
 				}
@@ -296,6 +319,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 				for i := 0; i < len(c.ReduceTasks); i++ {
 					if c.ReduceTasks[i].JobStatus == Finish {
 						continue
+					} else if (!c.ReduceTasks[i].StartTime.Equal(time.Time{})) && time.Since(c.ReduceTasks[i].StartTime) > time.Second*5 {
+						c.ReduceTasks[i].JobStatus = Crash
+						c.Wlock.Lock()
+						if len(c.Workers) > 0 {
+							util.Error("ReduceStage---BelongId: %d", c.ReduceTasks[i].BelongID)
+							c.Workers[c.ReduceTasks[i].BelongID].Online = Off
+						}
+						//c.Workers[c.MapTasks[i].BelongID].Online = Off
+						c.Wlock.Unlock()
 					}
 					cnt++
 				}
@@ -310,6 +342,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 				cnt := 0
 				for i := 0; i < len(c.Workers); i++ {
 					if c.Workers[i].Online == On {
+						util.Info("Worker: ", i, " still alive")
 						cnt++
 					}
 				}
@@ -321,7 +354,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 			}
 			c.Glock.Unlock()
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 		}
 	}(&c)
 

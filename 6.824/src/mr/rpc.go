@@ -22,12 +22,14 @@ const (
 	Mistake = 300 //代表产生错误
 	Nojob   = 400 //暂时没有工作，请等待
 	Exit    = 500 //请退出程序
+	Deny    = 600
 
 	MapOk    = "Apply Map Task Success."
 	ReduceOk = "Apply Reduce Task Success."
 	Notask   = "Please Wait for a new job"
 	Shutdonw = "Please shut down."
 	Success  = "Mission complete."
+	Refuse   = "Refuse to register a new worker, because we are done."
 )
 
 type GeneralResp struct {
