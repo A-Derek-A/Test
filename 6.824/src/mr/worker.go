@@ -129,7 +129,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 					for i := 0; i < len(intermediate); i++ {
 						newFileName := "mr-mid-" + strconv.Itoa(j.JobId) + "-" + strconv.Itoa(i) + ".txt"
-						newFile, err := os.OpenFile(BasePath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
+						newFile, err := os.OpenFile(BasePath+"/"+newFileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 						if err != nil {
 							//log.Fatal("err: ", err)
 							util.Error("err: ", err)
@@ -166,6 +166,13 @@ func Worker(mapf func(string, string) []KeyValue,
 							t := strings.Split(line, " ")
 
 							if len(t) > 1 {
+								if len(t) != 2 {
+									util.Error("Attention Now!")
+									for _, tt := range t {
+										util.Info(tt)
+									}
+									util.Error("Attention End!")
+								}
 								fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
 							}
 							//v_int, _:= strconv.ParseInt(t[1], 10, 64)
@@ -177,7 +184,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					}
 					FinalList := Partition(tempKvList)
 					//FinalReducePath+"/"+
-					outputFile, err := os.OpenFile("mr-out-"+strconv.Itoa(j.JobId), os.O_WRONLY|os.O_CREATE, 0666)
+					outputFile, err := os.OpenFile("mr-out-"+strconv.Itoa(j.JobId), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 					if err != nil {
 						util.Error("Worker---Reduce---error: ", err)
 					}

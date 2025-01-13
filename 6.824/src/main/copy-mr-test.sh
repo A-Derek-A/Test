@@ -100,9 +100,9 @@ fi
 # wait for remaining workers and coordinator to exit.
 wait
 
-##########################################################
-## now indexer
-rm -f mr-*
+#########################################################
+# now indexer
+rm -rf mr-*
 
 # generate the correct output
 ../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
@@ -130,37 +130,37 @@ fi
 
 wait
 
-##########################################################
-#echo '***' Starting map parallelism test.
-#
-#rm -f mr-*
-#
-#$TIMEOUT ../mrcoordinator ../pg*txt &
-#sleep 1
-#
-#$TIMEOUT ../mrworker ../../mrapps/mtiming.so &
-#$TIMEOUT ../mrworker ../../mrapps/mtiming.so
-#
-#NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
-#if [ "$NT" != "2" ]
-#then
-#  echo '---' saw "$NT" workers rather than 2
-#  echo '---' map parallelism test: FAIL
-#  failed_any=1
-#fi
-#
-#if cat mr-out* | grep '^parallel.* 2' > /dev/null
-#then
-#  echo '---' map parallelism test: PASS
-#else
-#  echo '---' map workers did not run in parallel
-#  echo '---' map parallelism test: FAIL
-#  failed_any=1
-#fi
-#
-#wait
-#
-#
+#########################################################
+echo '***' Starting map parallelism test.
+
+rm -rf mr-*
+
+$TIMEOUT ../mrcoordinator ../pg*txt &
+sleep 1
+
+$TIMEOUT ../mrworker ../../mrapps/mtiming.so &
+$TIMEOUT ../mrworker ../../mrapps/mtiming.so
+
+NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
+if [ "$NT" != "2" ]
+then
+  echo '---' saw "$NT" workers rather than 2
+  echo '---' map parallelism test: FAIL
+  failed_any=1
+fi
+
+if cat mr-out* | grep '^parallel.* 2' > /dev/null
+then
+  echo '---' map parallelism test: PASS
+else
+  echo '---' map workers did not run in parallel
+  echo '---' map parallelism test: FAIL
+  failed_any=1
+fi
+
+wait
+
+
 ##########################################################
 #echo '***' Starting reduce parallelism test.
 #
@@ -315,8 +315,8 @@ wait
 #  echo '---' crash test: FAIL
 #  failed_any=1
 #fi
-
-#########################################################
+#
+##########################################################
 #if [ $failed_any -eq 0 ]; then
 #    echo '***' PASSED ALL TESTS
 #else
