@@ -122,9 +122,11 @@ func Worker(mapf func(string, string) []KeyValue,
 						parid := ihash(v.Key) % j.ParNum
 						intermediate[parid] = append(intermediate[parid], v)
 					}
+
 					for i := 0; i < len(intermediate); i++ {
 						sort.Sort(ByKey(intermediate[i]))
 					}
+
 					for i := 0; i < len(intermediate); i++ {
 						newFileName := "mr-mid-" + strconv.Itoa(j.JobId) + "-" + strconv.Itoa(i) + ".txt"
 						newFile, err := os.OpenFile(BasePath+"/"+newFileName, os.O_WRONLY|os.O_CREATE, 0666)
@@ -162,6 +164,7 @@ func Worker(mapf func(string, string) []KeyValue,
 						for scanner.Scan() {
 							line := scanner.Text()
 							t := strings.Split(line, " ")
+
 							if len(t) > 1 {
 								fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
 							}

@@ -48,7 +48,7 @@ rm -f mr-*
 (cd ../../mrapps && go clean)
 (cd .. && go clean)
 (cd ../../mrapps && go build $RACE -buildmode=plugin wc.go) || exit 1
-#(cd ../../mrapps && go build $RACE -buildmode=plugin indexer.go) || exit 1
+(cd ../../mrapps && go build $RACE -buildmode=plugin indexer.go) || exit 1
 #(cd ../../mrapps && go build $RACE -buildmode=plugin mtiming.go) || exit 1
 #(cd ../../mrapps && go build $RACE -buildmode=plugin rtiming.go) || exit 1
 #(cd ../../mrapps && go build $RACE -buildmode=plugin jobcount.go) || exit 1
@@ -102,34 +102,34 @@ wait
 
 ##########################################################
 ## now indexer
-#rm -f mr-*
-#
-## generate the correct output
-#../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
-#sort mr-out-0 > mr-correct-indexer.txt
-#rm -f mr-out*
-#
-#echo '***' Starting indexer test.
-#
-#$TIMEOUT ../mrcoordinator ../pg*txt &
-#sleep 1
-#
-## start multiple workers
-#$TIMEOUT ../mrworker ../../mrapps/indexer.so &
-#$TIMEOUT ../mrworker ../../mrapps/indexer.so
-#
-#sort mr-out* | grep . > mr-indexer-all
-#if cmp mr-indexer-all mr-correct-indexer.txt
-#then
-#  echo '---' indexer test: PASS
-#else
-#  echo '---' indexer output is not the same as mr-correct-indexer.txt
-#  echo '---' indexer test: FAIL
-#  failed_any=1
-#fi
-#
-#wait
-#
+rm -f mr-*
+
+# generate the correct output
+../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
+sort mr-out-0 > mr-correct-indexer.txt
+rm -f mr-out*
+
+echo '***' Starting indexer test.
+
+$TIMEOUT ../mrcoordinator ../pg*txt &
+sleep 1
+
+# start multiple workers
+$TIMEOUT ../mrworker ../../mrapps/indexer.so &
+$TIMEOUT ../mrworker ../../mrapps/indexer.so
+
+sort mr-out* | grep . > mr-indexer-all
+if cmp mr-indexer-all mr-correct-indexer.txt
+then
+  echo '---' indexer test: PASS
+else
+  echo '---' indexer output is not the same as mr-correct-indexer.txt
+  echo '---' indexer test: FAIL
+  failed_any=1
+fi
+
+wait
+
 ##########################################################
 #echo '***' Starting map parallelism test.
 #
