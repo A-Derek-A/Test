@@ -300,7 +300,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 						c.MapTasks[i].JobStatus = Crash
 						c.Wlock.Lock()
 						if len(c.Workers) > 0 {
-							util.Error("MapStage---BelongId: %d", c.MapTasks[i].BelongID)
+							util.Info("MapStage---BelongId: %d", c.MapTasks[i].BelongID)
 							c.Workers[c.MapTasks[i].BelongID].Online = Off
 						}
 						c.Wlock.Unlock()
@@ -323,7 +323,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 						c.ReduceTasks[i].JobStatus = Crash
 						c.Wlock.Lock()
 						if len(c.Workers) > 0 {
-							util.Error("ReduceStage---BelongId: %d", c.ReduceTasks[i].BelongID)
+							util.Info("ReduceStage---BelongId: %d", c.ReduceTasks[i].BelongID)
 							c.Workers[c.ReduceTasks[i].BelongID].Online = Off
 						}
 						//c.Workers[c.MapTasks[i].BelongID].Online = Off
@@ -357,68 +357,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			time.Sleep(1 * time.Second)
 		}
 	}(&c)
-
-	//go func(c *Coordinator) {
-	//	if c.TaskStage == NotifyS {
-	//
-	//
-	//		//准备一个Reduce输出的列表
-	//		tempList := make([]*os.File, 0)
-	//
-	//		//for _, file := range files {
-	//		//	if file.Name()[len(file.Name())-5:] == strconv.Itoa(j.JobId)+".txt" {
-	//		//		tf, _ := os.Open(BasePath + "/" + file.Name())
-	//		//		tempList = append(tempList, tf)
-	//		//	}
-	//		//}
-	//
-	//		for i := 0; i < c.PartitionNum; i++{
-	//			tf, err := os.Open(FinalReducePath + "/" + "mr-rd-" + strconv.Itoa(i) + ".txt")
-	//			if err != nil{
-	//				util.Error("file can't open.")
-	//			}
-	//			tempList = append(tempList, tf)
-	//		}
-	//
-	//
-	//		tempKvList := make([][]KeyValue, 0)
-	//		for _, v := range tempList {
-	//			fileKvList := make([]KeyValue, 0)
-	//			scanner := bufio.NewScanner(v)
-	//			for scanner.Scan() {
-	//				line := scanner.Text()
-	//				t := strings.Split(line, " ")
-	//				if len(t) > 1{
-	//					fileKvList = append(fileKvList, KeyValue{Key: t[0], Value: t[1]})
-	//				}
-	//				//v_int, _:= strconv.ParseInt(t[1], 10, 64)
-	//			}
-	//			tempKvList = append(tempKvList, fileKvList)
-	//		}
-	//		for _, v := range tempList {
-	//			v.Close()
-	//		}
-	//		FinalList := Partition(tempKvList)
-	//
-	//		outputFile, err := os.OpenFile("mr-rd-"+strconv.Itoa(j.JobId)+".txt", os.O_WRONLY|os.O_CREATE, 0666)
-	//		i := 0
-	//		for i < len(FinalList) {
-	//			k := i + 1
-	//			for k < len(FinalList) && FinalList[k].Key == FinalList[i].Key {
-	//				k++
-	//			}
-	//			values := []string{}
-	//			for k1 := i; k1 < k; k1++ {
-	//				values = append(values, FinalList[k1].Value)
-	//			}
-	//			output := reducef(FinalList[i].Key, values)
-	//
-	//			// this is the correct format for each line of Reduce output.
-	//			fmt.Fprintf(outputFile, "%v %v\n", FinalList[i].Key, output)
-	//			i = k
-	//		}
-	//	}
-	//}(&c)
 
 	c.server()
 	return &c
