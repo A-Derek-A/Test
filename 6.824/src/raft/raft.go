@@ -45,6 +45,8 @@ const ( // 节点持票状态
 	Lose = false // 表明已经投票
 )
 
+const ()
+
 const ( // 对于Leader节点，返回的Follower信息
 	Out    = 1 // Follower认为的Leader节点信息
 	Common = 2 // Follower 对于心跳包的回应
@@ -269,6 +271,10 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, num *int) bool {
+	if rf.killed() {
+		return false
+	}
+
 	DPrintf("raft.Id: %d ---- rf.Role: %+v ---- in sendRequestVote", rf.me, rf.Role)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if !ok {
@@ -279,7 +285,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	if reply.BallotState == Normal {
 		*num++
-		if *num > (len(rf.peers)/2)+1 {
+		if *num > (len(rf.peers) / 2) {
 			if rf.Role == Leader {
 				DPrintf("raft.Id: %d ---- reply.Term: %d ---- reply.Role: %+v ---- in sendRequestVote", rf.me, reply.Term, rf.Role)
 				return true
