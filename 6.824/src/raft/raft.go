@@ -204,7 +204,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.CurTerm {
 		reply.Term = rf.CurTerm
 		reply.BallotState = Refuse
-		return
 	} else {
 		if args.Term > rf.CurTerm { //说明当前节点的任期较小，需要更新信息，并且变成follower
 			rf.Role = Follower
@@ -221,6 +220,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.BallotState = Voted
 		}
 	}
+	return
 }
 
 func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -313,9 +313,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntry", args, reply)
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if reply.State == true {
 		return true
 	} else if reply.State == false {
