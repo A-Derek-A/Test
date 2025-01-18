@@ -103,9 +103,30 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term      int  //其他节点的Term
-	State     bool //该条Append的状态
-	StateCode int  //状态信息码
+	Term  int  //其他节点的Term
+	State bool //该条Append的状态
+}
+
+// RoleChange 更改身份函数 包含降级和和升级操作,并更新任期
+func (rf *Raft) RoleChange(target int, newTerm int) {
+	rf.CurTerm = newTerm
+	switch target {
+	case Follower:
+		rf.Role = Follower        // 将该节点的角色重制为Follower
+		rf.Timer.Reset(rf.Period) // 重置该节点的计时器为
+		rf.Support = -1           // 重置该节点支持对象为无
+		rf.VoteState = Have
+	case Candidate:
+		rf.Role = Candidate
+		rf.Timer.Reset(rf.Period)
+		rf.Support = rf.me
+		rf.VoteState = Lose
+	case Leader:
+		rf.Role = Leader
+		rf.Timer.Reset(rf.Heart)
+		rf.Support = rf.me
+		rf.VoteState = Lose
+	}
 }
 
 // return currentTerm and whether this server
@@ -168,7 +189,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	return true
 }
 
-// the service says it has created a snapshot that has
+// Snapshot the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
@@ -181,11 +202,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term      int
-	Represent int
+	Term int
+	Me   int
 }
 
-// example RequestVote RPC reply structure.
+// RequestVoteReply example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
@@ -196,31 +217,27 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//fmt.Printf("raft.Id: %+v\n", rf.me)
-	//fmt.Printf("%d -> %d\n", args.Represent, rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//fmt.Printf("raft.Id: %+v Now", rf.me)
-	if args.Term < rf.CurTerm {
-		reply.Term = rf.CurTerm
+
+	//公共逻辑尽可能变少，Term
+	switch {
+	case args.Term < rf.CurTerm:
 		reply.BallotState = Refuse
-	} else {
-		if args.Term > rf.CurTerm { //说明当前节点的任期较小，需要更新信息，并且变成follower
-			rf.Role = Follower
-			rf.CurTerm = args.Term
-			rf.Support = -1
-			rf.VoteState = Have
-		}
+	case args.Term > rf.CurTerm: // 当前节点的Term 小于 发来的消息的节点，处理完
+		rf.RoleChange(Follower, args.Term)
+		fallthrough
+	case args.Term == rf.CurTerm:
 		if rf.VoteState == Have {
-			rf.Support = args.Represent
-			reply.Term = rf.CurTerm
+			rf.Support = args.Me
 			reply.BallotState = Normal
 		} else if rf.VoteState == Lose {
-			reply.Term = rf.CurTerm
 			reply.BallotState = Voted
 		}
 	}
+	reply.Term = rf.CurTerm
 	return
+
 }
 
 func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -228,18 +245,15 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 	defer rf.mu.Unlock()
 
 	if args.LeaderTerm < rf.CurTerm {
-		reply.Term = rf.CurTerm
 		reply.State = false
-		reply.StateCode = Out
-	} else {
-		rf.CurTerm = args.LeaderTerm
+	} else if args.LeaderTerm == rf.CurTerm {
+		reply.State = true
+	} else if args.LeaderTerm > rf.CurTerm { // 当前节点的信息陈旧，需要更新
+		rf.RoleChange(Follower, args.LeaderTerm)
 		rf.Support = args.From
-		rf.Role = Follower
-		rf.Timer.Reset(rf.Period)
-		reply.Term = rf.CurTerm
-		reply.StateCode = Common
 		reply.State = true
 	}
+	reply.Term = rf.CurTerm
 	return
 }
 
@@ -270,63 +284,88 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, num *int) bool {
-	if rf.killed() {
-		return false
-	}
 
-	DPrintf("raft.Id: %d ---- rf.Role: %+v ---- in sendRequestVote", rf.me, rf.Role)
+//写一个节点打印函数
+
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, num *int) bool {
+
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if !ok {
-		DPrintf("%+v", ok)
+		rf.Error("rpc Call Error in sendRequestVote function, %+v", ok)
+		return ok
 	}
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if reply.BallotState == Normal {
 		*num++
 		if *num > (len(rf.peers) / 2) {
-			if rf.Role == Leader {
-				DPrintf("raft.Id: %d ---- reply.Term: %d ---- reply.Role: %+v ---- in sendRequestVote", rf.me, reply.Term, rf.Role)
+			if rf.Role == Leader { // 已经是Leader直接返回
 				return true
 			}
-			rf.Role = Leader
+			rf.RoleChange(Leader, rf.CurTerm) // 不是则重置身份
+			rf.sendAllHeartbeat()             // 立即向所有人发送一次心跳
 			*num = 0
 		}
-		rf.Timer.Reset(rf.Heart)
-
 	} else if reply.BallotState == Voted {
-		DPrintf("raft.Id: %d ---- rf.Role: %+v ---- in sendRequestVote ----Voted", rf.me, rf.Role)
-	} else if reply.BallotState == Refuse {
-		rf.Role = Follower
-		rf.Timer.Reset(rf.Period)
-		if reply.Term > rf.CurTerm {
-			rf.CurTerm = reply.Term
-			rf.Support = -1
-		}
+
+	} else if reply.BallotState == Refuse { // Refuse 和 Vote 本质是一样的，可以优化
+		// 多个Refuse回应会多次重制为Follower
+		rf.RoleChange(Follower, reply.Term)
 	}
 
-	DPrintf("raft.Id: %d ---- reply.Term: %d ---- reply.Role: %+v ---- in sendRequestVote", rf.me, reply.Term, rf.Role)
-	DPrintf("%+v, %+v", reply.Term, reply.BallotState)
 	return ok
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntry", args, reply)
+	if !ok {
+		rf.Error("rpc Call Error in sendAppendEntries function, %+v", ok)
+		return ok
+	}
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if reply.State == true {
 		return true
 	} else if reply.State == false {
-		if reply.StateCode == Out {
-			rf.CurTerm = reply.Term
-			rf.Role = Follower
-			rf.Support = -1
-			rf.Timer.Reset(rf.Period)
-		}
+		rf.RoleChange(Follower, reply.Term)
+		return false
 	}
 	return ok
+}
+
+func (rf *Raft) sendAllHeartbeat() {
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		args := AppendEntriesArgs{
+			From:       rf.me,
+			To:         i,
+			LeaderTerm: rf.CurTerm,
+		}
+		reply := AppendEntriesReply{}
+		go rf.sendAppendEntries(i, &args, &reply)
+	}
+}
+
+func (rf *Raft) sendAllVote() {
+	BallotNum := 1
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		args := RequestVoteArgs{
+			Term: rf.CurTerm,
+			Me:   rf.me,
+		}
+		reply := RequestVoteReply{}
+		go rf.sendRequestVote(i, &args, &reply, &BallotNum) //并发地发送选举请求
+		//可能不知道哪个节点发来的投票结果
+	}
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -378,54 +417,23 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		// DPrintf("raft.Id: %d", rf.me)
 		<-rf.Timer.C
-		//rf.mu.Lock()
-		//defer rf.mu.Unlock()
 		switch rf.Role {
 		case Follower:
-			rf.Role = Candidate
-			DPrintf("raft.Id: %d ---- rf.Role: %+v", rf.me, rf.Role)
+			rf.RoleChange(Candidate, rf.CurTerm)
 			fallthrough
-		case Candidate:
-
-			rf.Timer.Reset(rf.Period) //开启竞选的倒计时
-			rf.CurTerm++              //任期号+1
-			rf.Support = rf.me        //竞选支持者
-			//rf.BallotNum = 1          //已获得选票数
-
-			BallotNum := 1
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					continue
-				}
-				args := RequestVoteArgs{
-					Term:      rf.CurTerm,
-					Represent: rf.me,
-				}
-				reply := RequestVoteReply{}
-				go rf.sendRequestVote(i, &args, &reply, &BallotNum) //并发地发送选举请求
-			}
-			DPrintf("raft.Id: %d ---- inTicker ---- Candidate ---- BallotNumber: %d\n", rf.me, BallotNum)
+		case Candidate: // 只有Candidate才能将任期号+1
+			rf.Timer.Reset(rf.Period) // 开启竞选的倒计时
+			rf.CurTerm++              // 任期号+1
+			rf.Support = rf.me        // 竞选支持者
+			rf.sendAllVote()
 		case Leader:
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					continue
-				}
-				args := AppendEntriesArgs{
-					From:       rf.me,
-					To:         i,
-					LeaderTerm: rf.CurTerm,
-				}
-				reply := AppendEntriesReply{}
-				go rf.sendAppendEntries(i, &args, &reply)
-			}
+			rf.sendAllHeartbeat()
 		}
-
 	}
 }
 
-// the service or tester wants to create a Raft server. the ports
+// Make the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
 // have the same order. persister is a place for this server to
@@ -440,8 +448,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		CurTerm: 0,
 		Support: -1,
 		Role:    Follower,
-		Heart:   time.Duration(50 * time.Millisecond),
-		Period:  time.Duration(time.Duration(1000+rand.Intn(500)) * time.Millisecond),
+		Heart:   50 * time.Millisecond,
+		Period:  time.Duration(1000+rand.Intn(500)) * time.Millisecond,
 	}
 	rf.peers = peers
 	rf.persister = persister
