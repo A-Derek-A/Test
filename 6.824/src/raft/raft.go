@@ -423,9 +423,9 @@ func (rf *Raft) ticker() {
 			rf.RoleChange(Candidate, rf.CurTerm)
 			fallthrough
 		case Candidate: // 只有Candidate才能将任期号+1
-			rf.Timer.Reset(rf.Period) // 开启竞选的倒计时
-			rf.CurTerm++              // 任期号+1
-			rf.Support = rf.me        // 竞选支持者
+			//rf.Timer.Reset(rf.Period) // 开启竞选的倒计时
+			rf.CurTerm++       // 任期号+1
+			rf.Support = rf.me // 竞选支持者
 			rf.sendAllVote()
 		case Leader:
 			rf.sendAllHeartbeat()
@@ -449,7 +449,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Support: -1,
 		Role:    Follower,
 		Heart:   50 * time.Millisecond,
-		Period:  time.Duration(1000+rand.Intn(500)) * time.Millisecond,
+		Period:  time.Duration(350+rand.Intn(200)) * time.Millisecond,
 	}
 	rf.peers = peers
 	rf.persister = persister
