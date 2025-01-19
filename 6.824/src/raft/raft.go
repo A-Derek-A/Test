@@ -35,9 +35,10 @@ const (
 )
 
 const ( // 当前应用在返回一票的信息状态上
-	Normal = 1 // 投票状态正常, 当前节点还没投过票
-	Voted  = 2 // 在该Term内已经投过票
-	Refuse = 3 // 拉票方的Term号小于当前节点的Term号，因此拒绝投票
+	Normal  = 1 // 投票状态正常, 当前节点还没投过票
+	Voted   = 2 // 在该Term内已经投过票
+	Refuse  = 3 // 拉票方的Term号小于当前节点的Term号，因此拒绝投票
+	Limited = 4
 )
 
 const ( // 节点持票状态
@@ -81,35 +82,62 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	CurTerm   int           // 当前的任期号
-	VoteState bool          // 当前投票的状态
-	Support   int           // 当前任期内支持谁
-	BallotNum int           // 选票的票数，仅在Candidate阶段使用
-	Role      int           // 当前节点的角色
-	Period    time.Duration // 倒计时
-	Heart     time.Duration // 心跳包的发送时长
-	Timer     *time.Ticker  // 计时器
-
+	CurTerm       int           // 当前的任期号
+	VoteState     bool          // 当前投票的状态
+	Support       int           // 当前任期内支持谁
+	Role          int           // 当前节点的角色
+	Period        time.Duration // 倒计时
+	Heart         time.Duration // 心跳包的发送时长
+	Timer         *time.Ticker  // 计时器
+	Logs          []Entry       // 用于存放log
+	CommitedIndex int           // 已提交的日志索引号
+	PeersInfo     PInfo         // 用于存放对等节点的信息，包括 matchIndex，nextIndex
+	Point         int           // 当前指向logs最新的指针，
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
 }
 
-type AppendEntriesArgs struct {
-	LeaderTerm int //Leader的Term号
-	From       int //来自何方的ID号/心跳包时则是Leader的ID号
-	To         int //去往何处的ID号
+type Entry struct {
+	Term    int         // 记录该Entry时的Term号
+	Command interface{} // 该Entry包含的命令
 }
 
+type PInfo struct {
+	MatchIndex    int  // Peer已经存入logs的Entry，每当一个节点成为Leader后将该值置为0
+	NextIndex     int  // Leader将要发给Follow的下一个索引，每当一个节点成为Leader后将该值置为Point + 1
+	CommitIndex   int  // Peer的CommitIndex
+	TrueNextIndex bool // Peer 的 NextIndex 是否正确，不正确一直发空包确认直到正确为止
+	// NextIndex = MatchIndex + 1
+}
+
+// 需要将PrevIndex和PrevTerm发给Follower
+// PrevIndex和PrevTerm 时leader 认为上一次发送的log的 Index 和其任期号，用于Follower节点在发现冲突时会退
+// 需要Leader的CommitIndex
+type AppendEntriesArgs struct {
+	LeaderTerm  int   // Leader的Term号
+	From        int   // 来自何方的ID号/心跳包时则是Leader的ID号
+	To          int   // 去往何处的ID号
+	PrevIndex   int   // Leader认为上一个发给Follower的索引
+	PrevTerm    int   // Leader认为上一个发给Follower的Term号
+	CommitIndex int   // 已经提交的索引
+	Item        Entry // 具体的Entry
+	// (2B)
+}
+
+// 需要将matchIndex发给Leader
 type AppendEntriesReply struct {
-	Term  int  //其他节点的Term
-	State bool //该条Append的状态
+	Term       int  // 其他节点的Term
+	State      bool // 该条Append的状态
+	MatchIndex int  // 回复节点的 Point 值
+
+	// (2B)
 }
 
 // RoleChange 更改身份函数 包含降级和和升级操作,并更新任期
 func (rf *Raft) RoleChange(target int, newTerm int) {
-	rf.CurTerm = newTerm
+	rf.CurTerm = newTerm // 变成新任期
 	switch target {
 	case Follower:
 		rf.Role = Follower        // 将该节点的角色重制为Follower
@@ -200,10 +228,16 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
+// 需要新增选举限制，即对于Follower来说，如果他的log比候选人的log更新，那么他就不会给候选人投票
+// log的最后一个条目，拥有更高的term号的更新，term号相同，则索引号更大的更新
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term int
 	Me   int
+	// 新增Candidate最后一条log的任期号和索引号
+	LastLogIndex int // 最后一条日志的索引
+	LastLogTerm  int // 最后一条日志的任期
+	// 用于进行选举限制
 }
 
 // RequestVoteReply example RequestVote RPC reply structure.
@@ -214,12 +248,29 @@ type RequestVoteReply struct {
 	BallotState int //返回投票信息
 }
 
+// CheckLog 目前仅在RequestVote里使用，所以不需要加锁
+func (rf *Raft) CheckLog(argsTerm, argsLastLogIndex int) bool {
+	if rf.Logs[rf.Point].Term > argsTerm {
+		return false
+	} else if rf.Logs[rf.Point].Term == argsTerm {
+		if rf.Point > argsLastLogIndex {
+			return false
+		} else {
+			return true
+		}
+	}
+	return true
+}
+
 // example RequestVote RPC handler.
+// 需要新增选举限制，即对于Follower来说，如果他的log比候选人的log更新，那么他就不会给候选人投票
+// log的最后一个条目，拥有更高的term号的更新，term号相同，则索引号更大的更新
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	rf.Warning("requestVote> curTerm: %+v, argsTerm: %+v", rf.CurTerm, args.Term)
 	//公共逻辑尽可能变少，Term
 	switch {
 	case args.Term < rf.CurTerm:
@@ -228,30 +279,43 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.RoleChange(Follower, args.Term)
 		fallthrough
 	case args.Term == rf.CurTerm:
-		if rf.VoteState == Have {
-			rf.Support = args.Me
-			reply.BallotState = Normal
-		} else if rf.VoteState == Lose {
-			reply.BallotState = Voted
+		if !rf.CheckLog(args.LastLogTerm, args.LastLogIndex) { // 没有通过选举人限制的检查
+			reply.BallotState = Limited
+		} else {
+			if rf.VoteState == Have { // 是否已经投票
+				rf.Support = args.Me
+				reply.BallotState = Normal
+				rf.VoteState = Lose
+			} else if rf.VoteState == Lose {
+				reply.BallotState = Voted
+			}
 		}
 	}
 	reply.Term = rf.CurTerm
+	rf.Warning("requestVote> curTerm: %+v, reply: %+v", rf.CurTerm, reply.Term)
 	return
 
 }
 
 func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// (2B)
+
+	// 1.发送心跳包不应被视为当前任期内的一条日志被提交，即心跳包不是非空指令
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if args.LeaderTerm < rf.CurTerm {
+	switch {
+	case args.LeaderTerm < rf.CurTerm: // 老的Leader发来的心跳
 		reply.State = false
-	} else if args.LeaderTerm == rf.CurTerm {
-		reply.State = true
-	} else if args.LeaderTerm > rf.CurTerm { // 当前节点的信息陈旧，需要更新
+	case args.LeaderTerm > rf.CurTerm: // 当前节点的信息陈旧，需要更新
 		rf.RoleChange(Follower, args.LeaderTerm)
 		rf.Support = args.From
 		reply.State = true
+		fallthrough
+	case args.LeaderTerm == rf.CurTerm: // 现任Leader发来的心跳
+		rf.Timer.Reset(rf.Period)
+		reply.State = true
+
 	}
 	reply.Term = rf.CurTerm
 	return
@@ -291,10 +355,12 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if !ok {
-		rf.Error("rpc Call Error in sendRequestVote function, %+v", ok)
+		rf.Error("rpc Call Error in sendRequestVote function : send to %+v, %+v", server, ok)
 		return ok
 	}
 
+	// 一旦有人选举成功成为Leader，它应该将所有的其他人的NextIndex设置为自己的Point + 1，MatchIndex置为0
+	// 并立即发送心跳包，该心跳包的entry为空，但应该prev相关里附上自己Point所指的entry的索引和Term号
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -314,19 +380,26 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		// 多个Refuse回应会多次重制为Follower
 		rf.RoleChange(Follower, reply.Term)
 	}
-
+	rf.Info("rpc Vote: node id: %+v, node term: %+v, node ballotState: %v", server, reply.Term, reply.BallotState)
 	return ok
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+
+	// (2B)
 	ok := rf.peers[server].Call("Raft.AppendEntry", args, reply)
 	if !ok {
-		rf.Error("rpc Call Error in sendAppendEntries function, %+v", ok)
+		rf.Error("rpc Call Error in sendAppendEntries function : send to %+v, %+v", server, ok)
 		return ok
 	}
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// 1.需要修改，因为即使reply.State == false，也不一定是需要降级，因为可能是Follower刚重启，他的NextIndex还对不上
+	// 2.应该在收到的任期号大于时立即降级为Follower
+	// 3.reply.State为false，应该认为对方的日志冲突，我们应该不断减少NextIndex的发送，直到它发来一个true，然后将对方的MatchIndex从0调整到NextIndex - 1
+	// 4.在收到reply后统一在ticker的心跳结束后再发送新日志/还是为每一个Follower设置一个Ticker？ 1
 
 	if reply.State == true {
 		return true
@@ -338,6 +411,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) sendAllHeartbeat() {
+	if rf.Role != Leader {
+		rf.Warning("only a leader could sendheartbeat")
+	}
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
@@ -349,6 +425,7 @@ func (rf *Raft) sendAllHeartbeat() {
 		}
 		reply := AppendEntriesReply{}
 		go rf.sendAppendEntries(i, &args, &reply)
+
 	}
 }
 
@@ -442,6 +519,9 @@ func (rf *Raft) ticker() {
 // tester or service expects Raft to send ApplyMsg messages.
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
+
+// 初始化2B 的内容
+
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
@@ -449,7 +529,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Support: -1,
 		Role:    Follower,
 		Heart:   50 * time.Millisecond,
-		Period:  time.Duration(350+rand.Intn(200)) * time.Millisecond,
+		Period:  time.Duration(500+rand.Intn(200)) * time.Millisecond,
+		Logs:    make([]Entry, 0),
 	}
 	rf.peers = peers
 	rf.persister = persister
