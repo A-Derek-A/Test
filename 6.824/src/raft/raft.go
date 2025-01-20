@@ -453,6 +453,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				*num++
 				if *num > len(rf.peers)/2 {
 					rf.CommittedIndex = len(rf.Logs)
+					*num = 0
+					// num置为0防止后续的AE回复多次设置CommittedIndex
+					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
 				}
 			}
 		}
