@@ -457,8 +457,14 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					// num置为0防止后续的AE回复多次设置CommittedIndex
 					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
 				}
+			} else if args.Item != emptyEntry && args.Item.Term != rf.CurTerm { // 说明这些包是已有的旧包，并且他们需要同步给其他的节点
+
+			} else if args.Item == emptyEntry { // 当前包为空的心跳包
+
 			}
 		}
+		rf.PeersInfo[server].MatchIndex = reply.MatchIndex
+		rf.PeersInfo[server].NextIndex = rf.PeersInfo[server].MatchIndex + 1
 	}
 
 	//if reply.State == true {
@@ -480,11 +486,19 @@ func (rf *Raft) sendAllHeartbeat() {
 			continue
 		}
 
+		// 查看Leader节点日志进度，如果已经出现Peer所需要的NextIndex那么在Item里填装好
+		tempEntry := Entry{}
+		if rf.PeersInfo[i].NextIndex <= len(rf.Logs) {
+			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex-1]
+		}
 		args := AppendEntriesArgs{
-			From:       rf.me,
-			To:         i,
-			LeaderTerm: rf.CurTerm,
-			Item:       Entry{},
+			From:        rf.me,
+			To:          i,
+			LeaderTerm:  rf.CurTerm,
+			Item:        tempEntry,
+			PrevIndex:   rf.PeersInfo[i].MatchIndex,
+			PrevTerm:    rf.Logs[rf.PeersInfo[i].MatchIndex-1].Term,
+			CommitIndex: rf.CommittedIndex,
 		}
 		reply := AppendEntriesReply{}
 		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
@@ -521,10 +535,21 @@ func (rf *Raft) sendAllVote() {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	index := -1
 	term := -1
 	isLeader := true
 
+	if rf.Role != Leader {
+		return -1, -1, false
+	}
+	rf.Logs = append(rf.Logs, Entry{
+		Term:    rf.CurTerm,
+		Command: command,
+	})
+	index = len(rf.Logs)
+	term = rf.CurTerm
 	// Your code here (2B).
 
 	return index, term, isLeader
