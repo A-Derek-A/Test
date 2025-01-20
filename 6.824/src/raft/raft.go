@@ -147,6 +147,10 @@ func (rf *Raft) RoleChange(target int, newTerm int) {
 		rf.Timer.Reset(rf.Heart)
 		rf.Support = rf.me
 		rf.VoteState = Lose
+		for i := 0; i < len(rf.PeersInfo); i++ {
+			rf.PeersInfo[i].NextIndex = len(rf.Logs) + 1 // 逻辑上下标1开始的Index，比实际的Logs中真实Index 大1
+			rf.PeersInfo[i].MatchIndex = 0               // 逻辑上的MatchIndex
+		}
 	}
 }
 
@@ -416,6 +420,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	} else if reply.BallotState == Refuse { // Refuse 和 Vote 本质是一样的，可以优化
 		// 多个Refuse回应会多次重制为Follower
 		rf.RoleChange(Follower, reply.Term)
+	} else if reply.BallotState == Limited {
+
 	}
 	rf.Info("rpc Vote: node id: %+v, node term: %+v, node ballotState: %v", server, reply.Term, reply.BallotState)
 	return ok
