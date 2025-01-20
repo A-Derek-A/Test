@@ -85,7 +85,7 @@ type Raft struct {
 	Logs           []Entry       // 用于存放log
 	CommittedIndex int           // 已提交的日志索引号
 	PeersInfo      []PInfo       // 用于存放对等节点的信息，包括 matchIndex，nextIndex
-	Point          int           // 当前指向logs最新的指针，
+	// Point          int           // 当前指向logs最新的指针，
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -98,10 +98,10 @@ type Entry struct {
 }
 
 type PInfo struct {
-	MatchIndex    int  // Peer已经存入logs的Entry，每当一个节点成为Leader后将该值置为0
-	NextIndex     int  // Leader将要发给Follow的下一个索引，每当一个节点成为Leader后将该值置为Point + 1
-	CommitIndex   int  // Peer的CommitIndex
-	TrueNextIndex bool // Peer 的 NextIndex 是否正确，不正确一直发空包确认直到正确为止
+	MatchIndex int // Peer已经存入logs的Entry，每当一个节点成为Leader后将该值置为0
+	NextIndex  int // Leader将要发给Follow的下一个索引，每当一个节点成为Leader后将该值置为Point + 1
+	// CommitIndex   int  // Peer的CommitIndex
+	// TrueNextIndex bool // Peer 的 NextIndex 是否正确，不正确一直发空包确认直到正确为止
 	// NextIndex = MatchIndex + 1
 }
 
@@ -247,14 +247,22 @@ func (rf *Raft) CheckLog(argsTerm, argsLastLogIndex int) bool {
 	if len(rf.Logs) == 0 { // 如果目前没有Logs记录，那么直接返回true
 		return true
 	}
-	if rf.Logs[rf.Point].Term > argsTerm {
+	if rf.Logs[len(rf.Logs)-1].Term > argsTerm {
 		return false
-	} else if rf.Logs[rf.Point].Term == argsTerm {
-		if rf.Point > argsLastLogIndex {
+	} else if rf.Logs[len(rf.Logs)-1].Term == argsTerm {
+		if len(rf.Logs) > argsLastLogIndex {
 			return false
 		}
 	}
 	return true
+	//if rf.Logs[rf.Point].Term > argsTerm {
+	//	return false
+	//} else if rf.Logs[rf.Point].Term == argsTerm {
+	//	if rf.Point > argsLastLogIndex {
+	//		return false
+	//	}
+	//}
+	//return true
 }
 
 // example RequestVote RPC handler.
@@ -306,22 +314,47 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 	// (2B)
 
 	// 1.发送心跳包不应被视为当前任期内的一条日志被提交，即心跳包不是非空指令
+	// 2.只有收到集群上，一半的节点(>=len(peers)，因为它自己也算)当前任期内日志的AE回复，才能更改本节点的CommittedIndex，CommittedIndex为len(rf.Logs)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	flag := true // flag 作为局部变量，用于判断是否是刚切换为Follower身份
+
 	switch {
 	case args.LeaderTerm < rf.CurTerm: // 老的Leader发来的心跳
-		reply.State = false
+		reply.State = false // State语义变化，等待修改
 	case args.LeaderTerm > rf.CurTerm: // 当前节点的信息陈旧，需要更新
 		rf.RoleChange(Follower, args.LeaderTerm)
 		rf.Support = args.From
-		reply.State = true
+		// reply.State = true						State 语义变化
+		flag = false
 		fallthrough
-	case args.LeaderTerm == rf.CurTerm: // 现任Leader发来的心跳
-		rf.Timer.Reset(rf.Period)
-		reply.State = true
+	case args.LeaderTerm == rf.CurTerm: // 现任Leader发来的心跳, 作为Follower需要重置定时器
+		// CommittedIndex 只有在成为Leader时才有用
+		// CommittedIndex 不需要判断，因为能选上Leader说明其CommittedIndex在大多数节点里都是最新的
+		// reply里的MatchIndex作为Follower节点来说可以等效为CommittedIndex
+		rf.CommittedIndex = args.CommitIndex
+		if flag { // flag变为false意味着刚刚转变为Follower
+			rf.Timer.Reset(rf.Period)
+		}
+		if (args.PrevIndex == 0 && len(rf.Logs) == 0) || (args.PrevIndex <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-1].Term) {
+			// PrevIndex为0，并且该节点日志为空，说明没有日志
+			// PrevIndex在本地日志中存在，并且能对上Term号
+			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
+			// 如果以上检查能通过，说明当前发来的日志包里是正确的包
+
+			// 日志的提交部分还没写
+			if args.PrevIndex < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志
+				rf.Logs = rf.Logs[:args.PrevIndex]
+			}
+			rf.Logs = append(rf.Logs, args.Item)
+			reply.State = true
+		} else {
+			reply.State = false
+		}
+		reply.MatchIndex = len(rf.Logs) // 直接告知该节点的MatchIndex
 	}
-	reply.Term = rf.CurTerm
+	reply.Term = rf.CurTerm // 任期号统一修改
 	return
 }
 
@@ -388,7 +421,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply, num *int) bool {
 
 	// (2B)
 	ok := rf.peers[server].Call("Raft.AppendEntry", args, reply)
@@ -407,20 +440,30 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	if reply.Term < rf.CurTerm {
 		rf.Info("your reply is outdated, because reply.Term: %d, but current Term: %d", reply.Term, rf.CurTerm)
-	} else if reply.Term > rf.CurTerm {
+	} else if reply.Term > rf.CurTerm { // 降为Follower就不需要维护peers的相关信息
 		rf.RoleChange(Follower, reply.Term)
 		// reply.MatchIndex
 		return false
 	} else if reply.Term == rf.CurTerm {
+		if reply.State == false {
 
+		} else if reply.State == true { // 刚刚发过去的包就是Follower需要，但仍需要鉴别是心跳包还是指令包以更新CommittedIndex
+			emptyEntry := Entry{}
+			if args.Item != emptyEntry && args.Item.Term == rf.CurTerm { // 不等于空包并且为当前任期，对更新CommittedIndex贡献+1
+				*num++
+				if *num > len(rf.peers)/2 {
+					rf.CommittedIndex = len(rf.Logs)
+				}
+			}
+		}
 	}
 
-	if reply.State == true {
-		return true
-	} else if reply.State == false {
-		rf.RoleChange(Follower, reply.Term)
-		return false
-	}
+	//if reply.State == true {
+	//	return true
+	//} else if reply.State == false {
+	//	rf.RoleChange(Follower, reply.Term)
+	//	return false
+	//}
 	return ok
 }
 
@@ -428,17 +471,20 @@ func (rf *Raft) sendAllHeartbeat() {
 	if rf.Role != Leader {
 		rf.Warning("only a leader could sendheartbeat")
 	}
+	tempNum := 1
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
 		}
+
 		args := AppendEntriesArgs{
 			From:       rf.me,
 			To:         i,
 			LeaderTerm: rf.CurTerm,
+			Item:       Entry{},
 		}
 		reply := AppendEntriesReply{}
-		go rf.sendAppendEntries(i, &args, &reply)
+		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
 
 	}
 }
@@ -539,15 +585,15 @@ func (rf *Raft) ticker() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		CurTerm:        0,
-		Support:        -1,
-		VoteState:      Have,
-		Role:           Follower,
-		Heart:          50 * time.Millisecond,
-		Period:         time.Duration(500+rand.Intn(200)) * time.Millisecond,
-		Logs:           make([]Entry, 0),
-		PeersInfo:      make([]PInfo, 0),
-		Point:          0,
+		CurTerm:   0,
+		Support:   -1,
+		VoteState: Have,
+		Role:      Follower,
+		Heart:     50 * time.Millisecond,
+		Period:    time.Duration(500+rand.Intn(200)) * time.Millisecond,
+		Logs:      make([]Entry, 0),
+		PeersInfo: make([]PInfo, 0),
+		//Point:          -1,	// Point代表了已经存入的指针位置，初始为-1，代表尚未有任何日志存入
 		CommittedIndex: 0,
 	}
 	rf.peers = peers
@@ -557,10 +603,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// 根据传进来的peers初始化PeersInfo
 	for i := 0; i < len(rf.peers); i++ {
 		rf.PeersInfo = append(rf.PeersInfo, PInfo{
-			MatchIndex:    0,
-			NextIndex:     1,
-			CommitIndex:   0,
-			TrueNextIndex: true,
+			MatchIndex: 0,
+			NextIndex:  1,
 		})
 	}
 
