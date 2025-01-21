@@ -144,8 +144,8 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 		if old, oldok := cfg.logs[j][m.CommandIndex]; oldok && old != v {
 			log.Printf("%v: log %v; server %v\n", i, cfg.logs[i], cfg.logs[j])
 			// some server has already committed a different value for this entry!
-			err_msg = fmt.Sprintf("commit index=%v server=%v %v != server=%v %v",
-				m.CommandIndex, i, m.Command, j, old)
+			err_msg = fmt.Sprintf("we shall know the len: %v ,commit index=%v server=%v %v != server=%v %v",
+				len(cfg.logs[i]), m.CommandIndex, i, m.Command, j, old)
 		}
 	}
 	_, prevok := cfg.logs[i][m.CommandIndex-1]
@@ -495,7 +495,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 	for ind := 0; ind < len(temp); ind++ {
 		fmt.Println("maybe server: ", ind)
 		for k, v := range temp[ind] {
-			fmt.Printf("key: %+v, value: %+v", k, v)
+			fmt.Printf("key: %+v, value: %+v\n", k, v)
 		}
 	}
 	for i := 0; i < len(cfg.rafts); i++ {
@@ -591,8 +591,8 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				fmt.Println("index: ", index)
-				fmt.Println("nd: ", nd)
+				fmt.Println("-------------index: ", index)
+				fmt.Println("-------------nd: ", nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					fmt.Println("cmd", cmd)

@@ -85,7 +85,10 @@ type Raft struct {
 	Logs           []Entry       // 用于存放log
 	CommittedIndex int           // 已提交的日志索引号
 	PeersInfo      []PInfo       // 用于存放对等节点的信息，包括 matchIndex，nextIndex
-	// Point          int           // 当前指向logs最新的指针，
+	applyCh        chan ApplyMsg // 用于给tester发送命令已经committed的消息
+	ApplyPoint     int           // 已经被提交到Tester的指针
+	//Point          int           // 当前指向logs最新的指针，
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -223,6 +226,26 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
+func (rf *Raft) ApplyLogs() {
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if rf.CommittedIndex <= rf.ApplyPoint {
+			rf.mu.Unlock()
+			continue
+		}
+		rf.mu.Unlock()
+		for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ {
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.Logs[i].Command,
+				CommandIndex: i,
+			}
+			rf.ApplyPoint++
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 // 需要新增选举限制，即对于Follower来说，如果他的log比候选人的log更新，那么他就不会给候选人投票
@@ -356,6 +379,20 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			if args.Item != emptyEntry { // 不为空包
 				rf.Logs = append(rf.Logs, args.Item)
 			}
+			//for i := rf.CommittedIndex; i < Min(args.CommitIndex, len(rf.Logs)); i++ {
+			//	rf.Success("Committed Index: %d", i)
+			//	rf.applyCh <- ApplyMsg{
+			//		CommandValid: true,
+			//		CommandIndex: i,
+			//		Command:      args.Item.Command,
+			//	}
+			//	rf.CommittedIndex++
+			//}
+			//if rf.CommittedIndex == Min(args.CommitIndex, len(rf.Logs)) {
+			//	rf.Success("Follower Committed Index Success")
+			//} else {
+			//	rf.Warning("Follower Committed Index Error")
+			//}
 			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs))
 			if len(rf.Logs) != 0 {
 				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs), rf.Logs[len(rf.Logs)-1])
@@ -468,6 +505,20 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			if args.Item != emptyEntry && args.Item.Term == rf.CurTerm { // 不等于空包并且为当前任期，对更新CommittedIndex贡献+1
 				*num++
 				if *num > len(rf.peers)/2 {
+					//rf.Warning("Committed index (before) %d", rf.CommittedIndex)
+					//
+					//for i := rf.CommittedIndex; i < len(rf.Logs); i++ {
+					//	rf.applyCh <- ApplyMsg{
+					//		CommandValid: true,
+					//		CommandIndex: i,
+					//		Command:      rf.Logs[i].Command,
+					//	}
+					//	rf.Trace("%+v", rf.Logs[i].Command)
+					//	rf.CommittedIndex++
+					//}
+					//if rf.CommittedIndex == len(rf.Logs) {
+					//	rf.Success("Committed index is right, %d", rf.CommittedIndex)
+					//}
 					rf.CommittedIndex = len(rf.Logs)
 					*num = 0
 					// num置为0防止后续的AE回复多次设置CommittedIndex
@@ -509,6 +560,8 @@ func (rf *Raft) sendAllHeartbeat() {
 
 		// 查看Leader节点日志进度，如果已经出现Peer所需要的NextIndex那么在Item里填装好
 		tempEntry := Entry{}
+		rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
+		rf.Info("len rfLogs: %d", len(rf.Logs))
 		if rf.PeersInfo[i].NextIndex <= len(rf.Logs) {
 			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex-1]
 		}
@@ -521,6 +574,7 @@ func (rf *Raft) sendAllHeartbeat() {
 			PrevIndex:   rf.PeersInfo[i].MatchIndex,
 			CommitIndex: rf.CommittedIndex,
 		}
+		rf.Info("%+v", args.Item)
 		if args.PrevIndex == 0 {
 			args.PrevTerm = 0
 		} else {
@@ -653,6 +707,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		PeersInfo: make([]PInfo, 0),
 		//Point:          -1,	// Point代表了已经存入的指针位置，初始为-1，代表尚未有任何日志存入
 		CommittedIndex: 0,
+		ApplyPoint:     0,
+		applyCh:        applyCh,
 	}
 	rf.peers = peers
 	rf.persister = persister
@@ -673,6 +729,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.ApplyLogs()
 
 	return rf
 }
