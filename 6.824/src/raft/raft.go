@@ -149,7 +149,7 @@ func (rf *Raft) RoleChange(target int, newTerm int) {
 		rf.VoteState = Lose
 		for i := 0; i < len(rf.PeersInfo); i++ {
 			rf.PeersInfo[i].NextIndex = len(rf.Logs) + 1 // 逻辑上下标1开始的Index，比实际的Logs中真实Index 大1
-			rf.PeersInfo[i].MatchIndex = 0               // 逻辑上的MatchIndex
+			rf.PeersInfo[i].MatchIndex = len(rf.Logs)    // 逻辑上的MatchIndex，MatchIndex 始终保持比Next小1
 		}
 	}
 }
@@ -334,24 +334,34 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		flag = false
 		fallthrough
 	case args.LeaderTerm == rf.CurTerm: // 现任Leader发来的心跳, 作为Follower需要重置定时器
-		// CommittedIndex 只有在成为Leader时才有用
-		// CommittedIndex 不需要判断，因为能选上Leader说明其CommittedIndex在大多数节点里都是最新的
-		// reply里的MatchIndex作为Follower节点来说可以等效为CommittedIndex
-		rf.CommittedIndex = args.CommitIndex
 		if flag { // flag变为false意味着刚刚转变为Follower
 			rf.Timer.Reset(rf.Period)
 		}
+		// CommittedIndex 只有在成为Leader时才有用
+		// CommittedIndex 不需要判断，因为能选上Leader说明其CommittedIndex在大多数节点里都是最新的
+		// reply里的MatchIndex作为Follower节点来说可以等效为CommittedIndex
+
+		//rf.CommittedIndex = args.CommitIndex // 需要fix，因为CommittedIndex可能比MatchIndex还大因为日志是单个提交
+		rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
 		if (args.PrevIndex == 0 && len(rf.Logs) == 0) || (args.PrevIndex <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-1].Term) {
 			// PrevIndex为0，并且该节点日志为空，说明没有日志
 			// PrevIndex在本地日志中存在，并且能对上Term号
 			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
 			// 如果以上检查能通过，说明当前发来的日志包里是正确的包
-
-			// 日志的提交部分还没写
+			rf.Info("run here!")
 			if args.PrevIndex < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志
 				rf.Logs = rf.Logs[:args.PrevIndex]
 			}
-			rf.Logs = append(rf.Logs, args.Item)
+			emptyEntry := Entry{}
+			if args.Item != emptyEntry { // 不为空包
+				rf.Logs = append(rf.Logs, args.Item)
+			}
+			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs))
+			if len(rf.Logs) != 0 {
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs), rf.Logs[len(rf.Logs)-1])
+			} else {
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs))
+			}
 			reply.State = true
 		} else {
 			reply.State = false
@@ -451,7 +461,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		// reply.MatchIndex
 		return false
 	} else if reply.Term == rf.CurTerm {
-		if reply.State == false {
+		if reply.State == false { // reply.State 为 false，则认为发送的Prev有问题
 
 		} else if reply.State == true { // 刚刚发过去的包就是Follower需要，但仍需要鉴别是心跳包还是指令包以更新CommittedIndex
 			emptyEntry := Entry{}
@@ -471,6 +481,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		}
 		rf.PeersInfo[server].MatchIndex = reply.MatchIndex
 		rf.PeersInfo[server].NextIndex = rf.PeersInfo[server].MatchIndex + 1
+	}
+	for i := 0; i < len(rf.PeersInfo); i++ {
+		if i != rf.me {
+			rf.Trace("server: %d, MatchIndex: %d, NextIndex: %d", i, rf.PeersInfo[i].MatchIndex, rf.PeersInfo[i].NextIndex)
+		}
 	}
 
 	//if reply.State == true {
@@ -497,14 +512,19 @@ func (rf *Raft) sendAllHeartbeat() {
 		if rf.PeersInfo[i].NextIndex <= len(rf.Logs) {
 			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex-1]
 		}
+		rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
 		args := AppendEntriesArgs{
 			From:        rf.me,
 			To:          i,
 			LeaderTerm:  rf.CurTerm,
 			Item:        tempEntry,
 			PrevIndex:   rf.PeersInfo[i].MatchIndex,
-			PrevTerm:    rf.Logs[rf.PeersInfo[i].MatchIndex-1].Term,
 			CommitIndex: rf.CommittedIndex,
+		}
+		if args.PrevIndex == 0 {
+			args.PrevTerm = 0
+		} else {
+			args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex-1].Term
 		}
 		reply := AppendEntriesReply{}
 		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
@@ -518,10 +538,14 @@ func (rf *Raft) sendAllVote() {
 		if i == rf.me {
 			continue
 		}
+
 		args := RequestVoteArgs{
 			Term: rf.CurTerm,
 			Me:   rf.me,
 		}
+
+		// 添加选举Last
+
 		reply := RequestVoteReply{}
 		go rf.sendRequestVote(i, &args, &reply, &BallotNum) //并发地发送选举请求
 		//可能不知道哪个节点发来的投票结果
@@ -554,7 +578,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Term:    rf.CurTerm,
 		Command: command,
 	})
-	index = len(rf.Logs)
+	index = len(rf.Logs) - 1
 	term = rf.CurTerm
 	// Your code here (2B).
 

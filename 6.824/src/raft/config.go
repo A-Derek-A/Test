@@ -267,13 +267,11 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 }
 
-//
 // start or re-start a Raft.
 // if one already exists, "kill" it first.
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.crash1(i)
 
@@ -422,13 +420,11 @@ func (cfg *config) setlongreordering(longrel bool) {
 	cfg.net.LongReordering(longrel)
 }
 
-//
 // check that one of the connected servers thinks
 // it is the leader, and that no other connected
 // server thinks otherwise.
 //
 // try a few times in case re-elections are needed.
-//
 func (cfg *config) checkOneLeader() int {
 	for iters := 0; iters < 10; iters++ {
 		ms := 450 + (rand.Int63() % 100)
@@ -477,10 +473,8 @@ func (cfg *config) checkTerms() int {
 	return term
 }
 
-//
 // check that none of the connected servers
 // thinks it is the leader.
-//
 func (cfg *config) checkNoLeader() {
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
@@ -496,6 +490,14 @@ func (cfg *config) checkNoLeader() {
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	var cmd interface{} = nil
+	temp := cfg.logs
+	fmt.Println("check all Logs")
+	for ind := 0; ind < len(temp); ind++ {
+		fmt.Println("maybe server: ", ind)
+		for k, v := range temp[ind] {
+			fmt.Printf("key: %+v, value: %+v", k, v)
+		}
+	}
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])
@@ -506,7 +508,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 		cfg.mu.Unlock()
 
 		if ok {
-			if count > 0 && cmd != cmd1 {
+			if count > 0 && cmd != cmd1 { // 和从前一个server中取出的command不一样
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v",
 					index, cmd, cmd1)
 			}
@@ -589,8 +591,13 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				fmt.Println("index: ", index)
+				fmt.Println("nd: ", nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
+					fmt.Println("cmd", cmd)
+					fmt.Println("cmd1", cmd1)
+
 					if cmd1 == cmd {
 						// and it was the command we submitted.
 						return index

@@ -1,13 +1,14 @@
 package raft
 
 import (
+	"cmp"
 	"fmt"
 	"log"
 	"time"
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -139,4 +140,20 @@ func magenta(s string) string {
 }
 func formatLog(prefix string) string {
 	return time.Now().Format("2006/01/02 15:04:05.000") + " " + prefix + " "
+}
+
+func Ternary(isTrue bool, first any, second any) any {
+	if isTrue {
+		fmt.Println("true, first")
+		return first
+	}
+	fmt.Println("false, second")
+	return second
+}
+
+func Min[T cmp.Ordered](a, b T) T {
+	if a < b {
+		return a
+	}
+	return b
 }
