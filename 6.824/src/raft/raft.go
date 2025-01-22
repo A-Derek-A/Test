@@ -373,6 +373,8 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 
 		//rf.CommittedIndex = args.CommitIndex // 需要fix，因为CommittedIndex可能比MatchIndex还大因为日志是单个提交
 		rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
+		// Leader: {101,1}, {103,2}
+		// Follower: {101,1}, {102,1}, {103,1}, {104,1}
 		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex+1 <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex].Term) {
 			// PrevIndex为0，并且该节点日志为空，说明没有日志
 			// PrevIndex在本地日志中存在，并且能对上Term号
@@ -407,10 +409,13 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs)-1) // index + 1，存在哨兵
 			}
 			reply.State = true
+			reply.MatchIndex = len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
+			// 空日志或者PrevIndex和PrevTerm都能对得上，那么MatchIndex才是目前日志最后一个
 		} else {
+			reply.MatchIndex = args.PrevIndex - 1
 			reply.State = false
 		}
-		reply.MatchIndex = len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
+
 	}
 	reply.Term = rf.CurTerm // 任期号统一修改
 	return
@@ -537,8 +542,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 			}
 		}
-		rf.PeersInfo[server].MatchIndex = reply.MatchIndex
+		//rf.PeersInfo[server].MatchIndex = reply.MatchIndex
+		rf.PeersInfo[server].MatchIndex = Min(reply.MatchIndex, len(rf.Logs)-1)
 		rf.PeersInfo[server].NextIndex = rf.PeersInfo[server].MatchIndex + 1
+		// 如果Follower中的日志数量大于Leader节点的数量，那么我们需要去其最小值
+
 	}
 	for i := 0; i < len(rf.PeersInfo); i++ {
 		if i != rf.me {

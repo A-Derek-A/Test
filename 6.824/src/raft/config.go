@@ -593,12 +593,12 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				fmt.Println("-------------index: ", index)
-				fmt.Println("-------------nd: ", nd)
+				//fmt.Println("-------------index: ", index)
+				//fmt.Println("-------------nd: ", nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
-					fmt.Println("cmd", cmd)
-					fmt.Println("cmd1", cmd1)
+					//fmt.Println("cmd", cmd)
+					//fmt.Println("cmd1", cmd1)
 
 					if cmd1 == cmd {
 						// and it was the command we submitted.

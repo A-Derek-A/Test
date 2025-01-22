@@ -141,7 +141,7 @@ func TestBasicAgree2B(t *testing.T) {
 	iters := 3
 	for index := 1; index < iters+1; index++ {
 		nd, _ := cfg.nCommitted(index)
-		fmt.Println("Test nd: ", nd)
+		//fmt.Println("Test nd: ", nd)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
@@ -511,7 +511,7 @@ func TestBackup2B(t *testing.T) {
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
-	fmt.Printf("disconnect: %d, %d, %d\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
+	//fmt.Printf("disconnect: %d, %d, %d\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
@@ -519,7 +519,7 @@ func TestBackup2B(t *testing.T) {
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader1].Start(rand.Int())
-		fmt.Println("Wouldn't commit commands")
+		//fmt.Println("Wouldn't commit commands")
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
@@ -527,7 +527,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
 
-	fmt.Println("recover now")
+	//fmt.Println("recover now")
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
@@ -561,10 +561,10 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
-	fmt.Printf("connect: %d, %d, %d\n", (leader1+0)%servers, (leader1+1)%servers, other)
+	//fmt.Printf("connect: %d, %d, %d\n", (leader1+0)%servers, (leader1+1)%servers, other)
 
 	// lots of successful commands to new group.
-	fmt.Println("second successful commands")
+	//fmt.Println("second successful commands")
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
