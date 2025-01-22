@@ -310,9 +310,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if rf.CheckLog(args.LastLogTerm, args.LastLogIndex) { // 日志检查通过了，变为Follower，没通过，只改变Term号
 			rf.RoleChange(Follower, args.Term)
 		} else {
-			reply.Term = rf.CurTerm
+			rf.CurTerm = args.Term
 			reply.BallotState = Limited
-			return
+			break
 		}
 		fallthrough
 	case args.Term == rf.CurTerm:
