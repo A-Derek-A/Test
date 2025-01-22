@@ -139,7 +139,7 @@ func TestBasicAgree2B(t *testing.T) {
 	cfg.begin("Test (2B): basic agreement")
 
 	iters := 3
-	for index := 1 - 1; index < iters+1-1; index++ { // -1 modified
+	for index := 1; index < iters+1; index++ {
 		nd, _ := cfg.nCommitted(index)
 		fmt.Println("Test nd: ", nd)
 		if nd > 0 {
@@ -169,7 +169,7 @@ func TestRPCBytes2B(t *testing.T) {
 
 	iters := 10
 	var sent int64 = 0
-	for index := 2 - 1; index < iters+2-1; index++ { // -1 modified
+	for index := 2; index < iters+2; index++ {
 		cmd := randstring(5000)
 		xindex := cfg.one(cmd, servers, false)
 		if xindex != index {
@@ -189,7 +189,7 @@ func TestRPCBytes2B(t *testing.T) {
 }
 
 // test just failure of followers.
-func For2023TestFollowerFailure2B(t *testing.T) {
+func TestFollowerFailure2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -218,7 +218,7 @@ func For2023TestFollowerFailure2B(t *testing.T) {
 	if ok != true {
 		t.Fatalf("leader rejected Start()")
 	}
-	if index != 3 { // -1 modified
+	if index != 4 {
 		t.Fatalf("expected index 4, got %v", index)
 	}
 
@@ -234,7 +234,7 @@ func For2023TestFollowerFailure2B(t *testing.T) {
 }
 
 // test just failure of leaders.
-func For2023TestLeaderFailure2B(t *testing.T) {
+func TestLeaderFailure2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -510,6 +510,7 @@ func TestBackup2B(t *testing.T) {
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
+	fmt.Printf("disconnect: %d, %d, %d\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
@@ -517,6 +518,7 @@ func TestBackup2B(t *testing.T) {
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader1].Start(rand.Int())
+		fmt.Println("Wouldn't commit commands")
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
@@ -524,6 +526,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
 
+	fmt.Println("recover now")
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
@@ -532,8 +535,9 @@ func TestBackup2B(t *testing.T) {
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
-	}
 
+	}
+	//time.Sleep(25 * time.Second) // Modified Sleep
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
 	other := (leader1 + 2) % servers
@@ -556,11 +560,14 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
+	fmt.Printf("connect: %d, %d, %d\n", (leader1+0)%servers, (leader1+1)%servers, other)
 
 	// lots of successful commands to new group.
+	fmt.Println("second successful commands")
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
+	//time.Sleep(25 * time.Second) // Modified Sleep
 
 	// now everyone
 	for i := 0; i < servers; i++ {

@@ -490,14 +490,16 @@ func (cfg *config) checkNoLeader() {
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	var cmd interface{} = nil
-	temp := cfg.logs
-	fmt.Println("check all Logs")
-	for ind := 0; ind < len(temp); ind++ {
-		fmt.Println("maybe server: ", ind)
-		for k, v := range temp[ind] {
-			fmt.Printf("key: %+v, value: %+v\n", k, v)
-		}
-	}
+	//temp := cfg.logs
+	//fmt.Println("check all Logs")
+	//for ind := 0; ind < len(temp); ind++ {
+	//	fmt.Println("maybe server: ", ind)
+	//	fmt.Printf("Logs length: %d\n", len(temp[ind]))
+	//	for k, v := range temp[ind] {
+	//		fmt.Printf("key: %+v, value: %+v\n", k, v)
+	//	}
+	//}
+
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])

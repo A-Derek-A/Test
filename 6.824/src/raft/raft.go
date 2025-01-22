@@ -151,8 +151,8 @@ func (rf *Raft) RoleChange(target int, newTerm int) {
 		rf.Support = rf.me
 		rf.VoteState = Lose
 		for i := 0; i < len(rf.PeersInfo); i++ {
-			rf.PeersInfo[i].NextIndex = len(rf.Logs) + 1 // 逻辑上下标1开始的Index，比实际的Logs中真实Index 大1
-			rf.PeersInfo[i].MatchIndex = len(rf.Logs)    // 逻辑上的MatchIndex，MatchIndex 始终保持比Next小1
+			rf.PeersInfo[i].NextIndex = len(rf.Logs)      // index + 1，存在哨兵
+			rf.PeersInfo[i].MatchIndex = len(rf.Logs) - 1 // index + 1，存在哨兵
 		}
 	}
 }
@@ -231,14 +231,15 @@ func (rf *Raft) ApplyLogs() {
 		rf.mu.Lock()
 		if rf.CommittedIndex <= rf.ApplyPoint {
 			rf.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		rf.mu.Unlock()
 		for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ {
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.Logs[i].Command,
-				CommandIndex: i,
+				Command:      rf.Logs[i+1].Command,
+				CommandIndex: i + 1, // index + 1，存在哨兵
 			}
 			rf.ApplyPoint++
 		}
@@ -271,13 +272,13 @@ type RequestVoteReply struct {
 // CheckLog 目前仅在RequestVote里使用，所以不需要加锁
 func (rf *Raft) CheckLog(argsTerm, argsLastLogIndex int) bool {
 	// 需要新增索引检查在最开始时，Logs是长度为0的记录
-	if len(rf.Logs) == 0 { // 如果目前没有Logs记录，那么直接返回true
+	if len(rf.Logs)-1 == 0 { // 如果目前没有Logs记录，那么直接返回true index + 1，存在哨兵
 		return true
 	}
 	if rf.Logs[len(rf.Logs)-1].Term > argsTerm {
 		return false
 	} else if rf.Logs[len(rf.Logs)-1].Term == argsTerm {
-		if len(rf.Logs) > argsLastLogIndex {
+		if len(rf.Logs)-1 > argsLastLogIndex { // index + 1，存在哨兵
 			return false
 		}
 	}
@@ -306,7 +307,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	case args.Term < rf.CurTerm:
 		reply.BallotState = Refuse
 	case args.Term > rf.CurTerm: // 当前节点的Term 小于 发来的消息的节点，处理完
-		rf.RoleChange(Follower, args.Term)
+		if rf.CheckLog(args.LastLogTerm, args.LastLogIndex) { // 日志检查通过了，变为Follower，没通过，只改变Term号
+			rf.RoleChange(Follower, args.Term)
+		} else {
+			reply.Term = rf.CurTerm
+			reply.BallotState = Limited
+			return
+		}
 		fallthrough
 	case args.Term == rf.CurTerm:
 		if !rf.CheckLog(args.LastLogTerm, args.LastLogIndex) { // 没有通过选举人限制的检查
@@ -366,14 +373,14 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 
 		//rf.CommittedIndex = args.CommitIndex // 需要fix，因为CommittedIndex可能比MatchIndex还大因为日志是单个提交
 		rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
-		if (args.PrevIndex == 0 && len(rf.Logs) == 0) || (args.PrevIndex <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-1].Term) {
+		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex+1 <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex].Term) {
 			// PrevIndex为0，并且该节点日志为空，说明没有日志
 			// PrevIndex在本地日志中存在，并且能对上Term号
 			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
 			// 如果以上检查能通过，说明当前发来的日志包里是正确的包
 			rf.Info("run here!")
-			if args.PrevIndex < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志
-				rf.Logs = rf.Logs[:args.PrevIndex]
+			if args.PrevIndex+1 < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志 index + 1，存在哨兵
+				rf.Logs = rf.Logs[:args.PrevIndex+1] // index + 1，存在哨兵
 			}
 			emptyEntry := Entry{}
 			if args.Item != emptyEntry { // 不为空包
@@ -393,17 +400,17 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			//} else {
 			//	rf.Warning("Follower Committed Index Error")
 			//}
-			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs))
+			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs)-1) // index + 1，存在哨兵
 			if len(rf.Logs) != 0 {
-				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs), rf.Logs[len(rf.Logs)-1])
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs)-1, rf.Logs[len(rf.Logs)-1]) // index + 1，存在哨兵
 			} else {
-				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs))
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs)-1) // index + 1，存在哨兵
 			}
 			reply.State = true
 		} else {
 			reply.State = false
 		}
-		reply.MatchIndex = len(rf.Logs) // 直接告知该节点的MatchIndex
+		reply.MatchIndex = len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
 	}
 	reply.Term = rf.CurTerm // 任期号统一修改
 	return
@@ -447,7 +454,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		return ok
 	}
 
-	// 一旦有人选举成功成为Leader，它应该将所有的其他人的NextIndex设置为自己的Point + 1，MatchIndex置为0
+	// 一旦有人选举成功成为Leader，它应该将所有的其他人的NextIndex设置为自己的len(rf.Logs), MatchIndex 为NextIndex - 1
 	// 并立即发送心跳包，该心跳包的entry为空，但应该prev相关里附上自己Point所指的entry的索引和Term号
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -519,7 +526,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					//if rf.CommittedIndex == len(rf.Logs) {
 					//	rf.Success("Committed index is right, %d", rf.CommittedIndex)
 					//}
-					rf.CommittedIndex = len(rf.Logs)
+					rf.CommittedIndex = len(rf.Logs) - 1 // index + 1，存在哨兵
 					*num = 0
 					// num置为0防止后续的AE回复多次设置CommittedIndex
 					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
@@ -562,8 +569,8 @@ func (rf *Raft) sendAllHeartbeat() {
 		tempEntry := Entry{}
 		rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
 		rf.Info("len rfLogs: %d", len(rf.Logs))
-		if rf.PeersInfo[i].NextIndex <= len(rf.Logs) {
-			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex-1]
+		if rf.PeersInfo[i].NextIndex+1 <= len(rf.Logs) { // index + 1，存在哨兵
+			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex]
 		}
 		rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
 		args := AppendEntriesArgs{
@@ -578,8 +585,9 @@ func (rf *Raft) sendAllHeartbeat() {
 		if args.PrevIndex == 0 {
 			args.PrevTerm = 0
 		} else {
-			args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex-1].Term
+			args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex].Term // index + 1，存在哨兵
 		}
+		rf.Trace("args.PrevTerm: %v", args.PrevTerm)
 		reply := AppendEntriesReply{}
 		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
 
@@ -592,10 +600,11 @@ func (rf *Raft) sendAllVote() {
 		if i == rf.me {
 			continue
 		}
-
 		args := RequestVoteArgs{
-			Term: rf.CurTerm,
-			Me:   rf.me,
+			Term:         rf.CurTerm,
+			Me:           rf.me,
+			LastLogIndex: len(rf.Logs) - 1,
+			LastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
 		}
 
 		// 添加选举Last
@@ -703,7 +712,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Role:      Follower,
 		Heart:     50 * time.Millisecond,
 		Period:    time.Duration(500+rand.Intn(200)) * time.Millisecond,
-		Logs:      make([]Entry, 0),
+		Logs:      make([]Entry, 1), //假设存在一个哨兵节点
 		PeersInfo: make([]PInfo, 0),
 		//Point:          -1,	// Point代表了已经存入的指针位置，初始为-1，代表尚未有任何日志存入
 		CommittedIndex: 0,
