@@ -487,8 +487,8 @@ func TestRejoin2B(t *testing.T) {
 	cfg.disconnect(leader2)
 
 	// old leader connected again
-	cfg.connect(leader1)        // 刚连上还没有彻底彻底选主，那么可能会导致日志被提交到旧的Leader那里
-	time.Sleep(5 * time.Second) // Modified
+	cfg.connect(leader1) // 刚连上还没有彻底彻底选主，那么可能会导致日志被提交到旧的Leader那里
+	// time.Sleep(5 * time.Second) // Modified
 
 	cfg.one(104, 2, true)
 
@@ -911,7 +911,10 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
 
-	cfg.one(rand.Int()%10000, 1, true)
+	fmt.Println("first cmd is coming")
+	firstcmd := rand.Int() % 10000
+	cfg.one(firstcmd, 1, true)
+	fmt.Printf("first cmd is %d\n", firstcmd)
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {

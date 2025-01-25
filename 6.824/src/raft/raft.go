@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"math/rand"
 	//	"bytes"
 	"sync"
@@ -112,13 +114,13 @@ type PInfo struct {
 // PrevIndex和PrevTerm 时leader 认为上一次发送的log的 Index 和其任期号，用于Follower节点在发现冲突时会退
 // 需要Leader的CommitIndex
 type AppendEntriesArgs struct {
-	LeaderTerm  int   // Leader的Term号
-	From        int   // 来自何方的ID号/心跳包时则是Leader的ID号
-	To          int   // 去往何处的ID号
-	PrevIndex   int   // Leader认为上一个发给Follower的索引
-	PrevTerm    int   // Leader认为上一个发给Follower的Term号
-	CommitIndex int   // 已经提交的索引
-	Item        Entry // 具体的Entry
+	LeaderTerm  int     // Leader的Term号
+	From        int     // 来自何方的ID号/心跳包时则是Leader的ID号
+	To          int     // 去往何处的ID号
+	PrevIndex   int     // Leader认为上一个发给Follower的索引
+	PrevTerm    int     // Leader认为上一个发给Follower的Term号
+	CommitIndex int     // 已经提交的索引
+	Item        []Entry // 具体的Entry
 	// (2B)
 }
 
@@ -180,12 +182,16 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurTerm)
+	e.Encode(rf.VoteState)
+	e.Encode(rf.Support)
+	e.Encode(rf.ApplyPoint)
+	e.Encode(rf.Logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+
 }
 
 // restore previously persisted state.
@@ -195,17 +201,23 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var curterm int
+	var votestate bool
+	var support int
+	var applypoint int
+	var logs []Entry
+	d.Decode(&curterm)
+	d.Decode(&votestate)
+	d.Decode(&support)
+	d.Decode(&applypoint)
+	d.Decode(&logs)
+	rf.CurTerm = curterm
+	rf.VoteState = votestate
+	rf.Support = support
+	rf.ApplyPoint = applypoint
+	rf.Logs = logs
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -300,6 +312,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	rf.Warning("requestVote> curTerm: %+v, argsTerm: %+v", rf.CurTerm, args.Term)
 	//公共逻辑尽可能变少，Term
@@ -351,6 +364,7 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 	// 2.只有收到集群上，一半的节点(>=len(peers)，因为它自己也算)当前任期内日志的AE回复，才能更改本节点的CommittedIndex，CommittedIndex为len(rf.Logs)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	flag := true // flag 作为局部变量，用于判断是否是刚切换为Follower身份
 
@@ -384,9 +398,12 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			if args.PrevIndex+1 < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志 index + 1，存在哨兵
 				rf.Logs = rf.Logs[:args.PrevIndex+1] // index + 1，存在哨兵
 			}
-			emptyEntry := Entry{}
-			if args.Item != emptyEntry { // 不为空包
-				rf.Logs = append(rf.Logs, args.Item)
+			//emptyEntry := Entry{}
+			if len(args.Item) != 0 { // 不为空包
+				for _, it := range args.Item {
+					rf.Logs = append(rf.Logs, it) // 添加一整个数组
+				}
+				//rf.Logs = append(rf.Logs, args.Item)
 			}
 			//for i := rf.CommittedIndex; i < Min(args.CommitIndex, len(rf.Logs)); i++ {
 			//	rf.Success("Committed Index: %d", i)
@@ -463,6 +480,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	// 并立即发送心跳包，该心跳包的entry为空，但应该prev相关里附上自己Point所指的entry的索引和Term号
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	if reply.BallotState == Normal {
 		*num++
@@ -497,6 +515,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	// 1.需要修改，因为即使reply.State == false，也不一定是需要降级，因为可能是Follower刚重启，他的NextIndex还对不上
 	// 2.应该在收到的任期号大于时立即降级为Follower
@@ -513,8 +532,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		if reply.State == false { // reply.State 为 false，则认为发送的Prev有问题
 
 		} else if reply.State == true { // 刚刚发过去的包就是Follower需要，但仍需要鉴别是心跳包还是指令包以更新CommittedIndex
-			emptyEntry := Entry{}
-			if args.Item != emptyEntry && args.Item.Term == rf.CurTerm { // 不等于空包并且为当前任期，对更新CommittedIndex贡献+1
+			// emptyEntry := Entry{}
+			if len(args.Item) != 0 && args.Item[len(args.Item)-1].Term == rf.CurTerm { // 不等于空包并且为当前任期，对更新CommittedIndex贡献+1
 				*num++
 				if *num > len(rf.peers)/2 {
 					//rf.Warning("Committed index (before) %d", rf.CommittedIndex)
@@ -536,9 +555,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					// num置为0防止后续的AE回复多次设置CommittedIndex
 					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
 				}
-			} else if args.Item != emptyEntry && args.Item.Term != rf.CurTerm { // 说明这些包是已有的旧包，并且他们需要同步给其他的节点
+			} else if len(args.Item) != 0 && args.Item[len(args.Item)-1].Term != rf.CurTerm { // 说明这些包是已有的旧包，并且他们需要同步给其他的节点
 
-			} else if args.Item == emptyEntry { // 当前包为空的心跳包
+			} else if len(args.Item) == 0 { // 当前包为空的心跳包
 
 			}
 		}
@@ -567,18 +586,19 @@ func (rf *Raft) sendAllHeartbeat() {
 	if rf.Role != Leader {
 		rf.Warning("only a leader could sendheartbeat")
 	}
-	tempNum := 1
+	tempNum := 1 // tempNumber可能需要重新设计
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
 		}
-
 		// 查看Leader节点日志进度，如果已经出现Peer所需要的NextIndex那么在Item里填装好
-		tempEntry := Entry{}
+		tempEntry := make([]Entry, Max(len(rf.Logs)-rf.PeersInfo[i].NextIndex, 0))
+		//tempEntry := Entry{}
 		rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
 		rf.Info("len rfLogs: %d", len(rf.Logs))
 		if rf.PeersInfo[i].NextIndex+1 <= len(rf.Logs) { // index + 1，存在哨兵
-			tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex]
+			//tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex:] // 可能需要改成一个数组
+			copy(tempEntry, rf.Logs[rf.PeersInfo[i].NextIndex:])
 		}
 		rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
 		args := AppendEntriesArgs{
@@ -598,7 +618,6 @@ func (rf *Raft) sendAllHeartbeat() {
 		rf.Trace("args.PrevTerm: %v", args.PrevTerm)
 		reply := AppendEntriesReply{}
 		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
-
 	}
 }
 
@@ -638,6 +657,7 @@ func (rf *Raft) sendAllVote() {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	index := -1
 	term := -1
 	isLeader := true
@@ -718,7 +738,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Support:   -1,
 		VoteState: Have,
 		Role:      Follower,
-		Heart:     50 * time.Millisecond,
+		Heart:     40 * time.Millisecond,
 		Period:    time.Duration(500+rand.Intn(200)) * time.Millisecond,
 		Logs:      make([]Entry, 1), //假设存在一个哨兵节点
 		PeersInfo: make([]PInfo, 0),
