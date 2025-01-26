@@ -378,7 +378,10 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		flag = false
 		fallthrough
 	case args.LeaderTerm == rf.CurTerm: // 现任Leader发来的心跳, 作为Follower需要重置定时器
-		if flag { // flag变为false意味着刚刚转变为Follower
+		if rf.Role == Candidate {
+			rf.RoleChange(Follower, args.LeaderTerm) // 作为同期竞选者
+		}
+		if flag { // flag变为false意味着是由上面fallthrough下来的Follower
 			rf.Timer.Reset(rf.Period)
 		}
 		// CommittedIndex 只有在成为Leader时才有用
@@ -386,7 +389,12 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		// reply里的MatchIndex作为Follower节点来说可以等效为CommittedIndex
 
 		//rf.CommittedIndex = args.CommitIndex // 需要fix，因为CommittedIndex可能比MatchIndex还大因为日志是单个提交
-		rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
+		if args.PrevIndex+1 <= len(rf.Logs) {
+			rf.Info("args.PrevIndex: %d, args.PrevTerm: %d, LogsIndex: %d, LogsTerm: %d", args.PrevIndex, args.PrevTerm, args.PrevIndex, rf.Logs[args.PrevIndex].Term)
+		} else {
+			rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
+		}
+
 		// Leader: {101,1}, {103,2}
 		// Follower: {101,1}, {102,1}, {103,1}, {104,1}
 		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex+1 <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex].Term) {
@@ -395,12 +403,17 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
 			// 如果以上检查能通过，说明当前发来的日志包里是正确的包
 			rf.Info("run here!")
-			if args.PrevIndex+1 < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index，则后面的日志为无效日志 index + 1，存在哨兵
+			if args.PrevIndex+1 < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index,但是不是最后一个，则后面的日志为无效日志 index + 1，存在哨兵
 				rf.Logs = rf.Logs[:args.PrevIndex+1] // index + 1，存在哨兵
 			}
 			//emptyEntry := Entry{}
 			if len(args.Item) != 0 { // 不为空包
+				testEntry := rf.Logs[len(rf.Logs)-1]
 				for _, it := range args.Item {
+					if testEntry == it {
+						rf.Warning("Something may wrong.")
+					}
+					testEntry = it
 					rf.Logs = append(rf.Logs, it) // 添加一整个数组
 				}
 				//rf.Logs = append(rf.Logs, args.Item)
@@ -427,9 +440,29 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			}
 			reply.State = true
 			reply.MatchIndex = len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
+			rf.Info("MatchIndex increase: %d", reply.MatchIndex)
 			// 空日志或者PrevIndex和PrevTerm都能对得上，那么MatchIndex才是目前日志最后一个
 		} else {
-			reply.MatchIndex = args.PrevIndex - 1
+			if args.PrevIndex+1 <= len(rf.Logs) {
+				nowTerm := rf.Logs[args.PrevIndex].Term
+				ind := args.PrevIndex
+				PreFlag := false
+				for ind > 0 && ind > rf.CommittedIndex && rf.Logs[ind].Term == nowTerm {
+					PreFlag = true
+					ind--
+				}
+				reply.MatchIndex = ind
+				if PreFlag {
+					rf.Warning("May not decrease the match index.something wrong")
+				} else {
+					rf.Info("MatchIndex decrease from args.PrevIndex: %d to now: %d", args.PrevIndex, reply.MatchIndex)
+				}
+
+			} else {
+				reply.MatchIndex = args.PrevIndex - 1
+				rf.Info("MatchIndex decrease -1 : %d", reply.MatchIndex)
+			}
+
 			reply.State = false
 		}
 
@@ -496,7 +529,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	} else if reply.BallotState == Refuse { // Refuse 和 Vote 本质是一样的，可以优化
 		// 多个Refuse回应会多次重制为Follower
-		rf.RoleChange(Follower, reply.Term)
+		if rf.Role == Candidate { // 这样Follower就只需要重置一次
+			rf.RoleChange(Follower, reply.Term)
+		}
 	} else if reply.BallotState == Limited {
 
 	}
@@ -556,7 +591,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
 				}
 			} else if len(args.Item) != 0 && args.Item[len(args.Item)-1].Term != rf.CurTerm { // 说明这些包是已有的旧包，并且他们需要同步给其他的节点
-
+				// 发过去的是一些旧包，
 			} else if len(args.Item) == 0 { // 当前包为空的心跳包
 
 			}
@@ -658,6 +693,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
+
 	index := -1
 	term := -1
 	isLeader := true
@@ -738,7 +774,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Support:   -1,
 		VoteState: Have,
 		Role:      Follower,
-		Heart:     40 * time.Millisecond,
+		Heart:     50 * time.Millisecond,
 		Period:    time.Duration(500+rand.Intn(200)) * time.Millisecond,
 		Logs:      make([]Entry, 1), //假设存在一个哨兵节点
 		PeersInfo: make([]PInfo, 0),

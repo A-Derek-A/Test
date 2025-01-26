@@ -913,7 +913,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	fmt.Println("first cmd is coming")
 	firstcmd := rand.Int() % 10000
-	cfg.one(firstcmd, 1, true)
+	cfg.one(firstcmd, 1, true) // 因为其他的可能失败，所以expectedServer为1
 	fmt.Printf("first cmd is %d\n", firstcmd)
 
 	nup := servers
@@ -922,8 +922,10 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			cfg.setlongreordering(true)
 		}
 		leader := -1
+		var te int
 		for i := 0; i < servers; i++ {
-			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
+			te = rand.Int()
+			_, _, ok := cfg.rafts[i].Start(te % 10000)
 			if ok && cfg.connected[i] {
 				leader = i
 			}
@@ -944,11 +946,22 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 		if nup < 3 {
 			s := rand.Int() % servers
-			if cfg.connected[s] == false {
+			if cfg.connected[s] == false { // 有概率重连上一个server
 				cfg.connect(s)
+				fmt.Printf("reconnect a server %d.\n", s)
 				nup += 1
 			}
 		}
+		if nup < 3 {
+			fmt.Printf("doesn't reconnect a server.\n")
+		}
+		alive := make([]int, 0)
+		for i := 0; i < servers; i++ {
+			if cfg.connected[i] == false {
+				alive = append(alive, i)
+			}
+		}
+		fmt.Println(alive)
 	}
 
 	for i := 0; i < servers; i++ {
@@ -1109,6 +1122,12 @@ func internalChurn(t *testing.T, unreliable bool) {
 
 func TestReliableChurn2C(t *testing.T) {
 	internalChurn(t, false)
+}
+
+func TestRangeReliableChurn(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		internalChurn(t, false)
+	}
 }
 
 func TestUnreliableChurn2C(t *testing.T) {
