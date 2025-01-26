@@ -310,6 +310,7 @@ func (rf *Raft) CheckLog(argsTerm, argsLastLogIndex int) bool {
 // log的最后一个条目，拥有更高的term号的更新，term号相同，则索引号更大的更新
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
@@ -323,9 +324,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if rf.CheckLog(args.LastLogTerm, args.LastLogIndex) { // 日志检查通过了，变为Follower，没通过，只改变Term号
 			rf.RoleChange(Follower, args.Term)
 		} else {
-			rf.CurTerm = args.Term
+			if rf.Role != Follower { // 如果日志检查没通过也不是Follower那么也需要转变为Follower
+				rf.RoleChange(Follower, args.Term)
+			} else {
+				rf.CurTerm = args.Term
+				reply.BallotState = Limited
+				break
+			}
 			reply.BallotState = Limited
-			break
 		}
 		fallthrough
 	case args.Term == rf.CurTerm:
@@ -432,9 +438,10 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			//} else {
 			//	rf.Warning("Follower Committed Index Error")
 			//}
+			rf.Info("args.CommitIndex: %d, logsLen: %d", args.CommitIndex, len(rf.Logs)-1)
 			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs)-1) // index + 1，存在哨兵
-			if len(rf.Logs) != 0 {
-				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs)-1, rf.Logs[len(rf.Logs)-1]) // index + 1，存在哨兵
+			if len(args.Item) != 0 {
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs)-1, args.Item) // index + 1，存在哨兵
 			} else {
 				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs)-1) // index + 1，存在哨兵
 			}
@@ -446,9 +453,9 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			if args.PrevIndex+1 <= len(rf.Logs) {
 				nowTerm := rf.Logs[args.PrevIndex].Term
 				ind := args.PrevIndex
-				PreFlag := false
+				PreFlag := true
 				for ind > 0 && ind > rf.CommittedIndex && rf.Logs[ind].Term == nowTerm {
-					PreFlag = true
+					PreFlag = false
 					ind--
 				}
 				reply.MatchIndex = ind
@@ -457,15 +464,12 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 				} else {
 					rf.Info("MatchIndex decrease from args.PrevIndex: %d to now: %d", args.PrevIndex, reply.MatchIndex)
 				}
-
 			} else {
-				reply.MatchIndex = args.PrevIndex - 1
-				rf.Info("MatchIndex decrease -1 : %d", reply.MatchIndex)
+				reply.MatchIndex = len(rf.Logs) - 1
+				rf.Info("MatchIndex decrease lot : %d", reply.MatchIndex)
 			}
-
 			reply.State = false
 		}
-
 	}
 	reply.Term = rf.CurTerm // 任期号统一修改
 	return
@@ -585,7 +589,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					//if rf.CommittedIndex == len(rf.Logs) {
 					//	rf.Success("Committed index is right, %d", rf.CommittedIndex)
 					//}
-					rf.CommittedIndex = len(rf.Logs) - 1 // index + 1，存在哨兵
+					rf.CommittedIndex = reply.MatchIndex // 改成了Match Index，因为网络延迟导致原本又有新包出现在leader的log中
+					// rf.CommittedIndex = len(rf.Logs) - 1
+					rf.Success("Committed index is right, %d", rf.CommittedIndex)
 					*num = 0
 					// num置为0防止后续的AE回复多次设置CommittedIndex
 					// num为函数内局部变量，可以有效的防止因并发而将后续的AE回复当成
