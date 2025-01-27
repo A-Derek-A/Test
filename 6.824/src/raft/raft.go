@@ -77,18 +77,20 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	CurTerm        int           // 当前的任期号
-	VoteState      bool          // 当前投票的状态
-	Support        int           // 当前任期内支持谁
-	Role           int           // 当前节点的角色
-	Period         time.Duration // 倒计时
-	Heart          time.Duration // 心跳包的发送时长
-	Timer          *time.Ticker  // 计时器
-	Logs           []Entry       // 用于存放log
-	CommittedIndex int           // 已提交的日志索引号
-	PeersInfo      []PInfo       // 用于存放对等节点的信息，包括 matchIndex，nextIndex
-	applyCh        chan ApplyMsg // 用于给tester发送命令已经committed的消息
-	ApplyPoint     int           // 已经被提交到Tester的指针
+	CurTerm           int           // 当前的任期号
+	VoteState         bool          // 当前投票的状态
+	Support           int           // 当前任期内支持谁
+	Role              int           // 当前节点的角色
+	Period            time.Duration // 倒计时
+	Heart             time.Duration // 心跳包的发送时长
+	Timer             *time.Ticker  // 计时器
+	Logs              []Entry       // 用于存放log
+	CommittedIndex    int           // 已提交的日志索引号
+	PeersInfo         []PInfo       // 用于存放对等节点的信息，包括 matchIndex，nextIndex
+	applyCh           chan ApplyMsg // 用于给tester发送命令已经committed的消息
+	ApplyPoint        int           // 已经被提交到Tester的指针
+	LastIncludedIndex int           // 快照最后一个删除元素的Index
+	LastIncludedTerm  int           // 快照最后一个删除元素的Term
 	//Point          int           // 当前指向logs最新的指针，
 
 	// Your data here (2A, 2B, 2C).
@@ -131,6 +133,21 @@ type AppendEntriesReply struct {
 	MatchIndex int  // 回复节点的 Point 值
 
 	// (2B)
+}
+
+type SnapShotReq struct {
+	Term              int    // Leader的任期号
+	LeaderId          int    // Leader的Id
+	LastIncludedIndex int    // 最后一个被快照包含的条目信息
+	LastIncludedTerm  int    // 最后一个被包含的条目任期
+	Done              bool   // 是否传输完毕
+	Data              []byte // 日志的原始数据
+	// Offset            int
+}
+
+type SnapShotResp struct {
+	Term     int
+	ServerId int
 }
 
 // RoleChange 更改身份函数 包含降级和和升级操作,并更新任期
@@ -223,7 +240,6 @@ func (rf *Raft) readPersist(data []byte) {
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
 	// Your code here (2D).
 
 	return true
@@ -518,27 +534,49 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
-
-	if reply.BallotState == Normal {
-		*num++
-		if *num > (len(rf.peers) / 2) {
-			if rf.Role == Leader { // 已经是Leader直接返回
-				return true
-			}
-			rf.RoleChange(Leader, rf.CurTerm) // 不是则重置身份
-			rf.sendAllHeartbeat()             // 立即向所有人发送一次心跳
-			*num = 0
-		}
-	} else if reply.BallotState == Voted {
-
-	} else if reply.BallotState == Refuse { // Refuse 和 Vote 本质是一样的，可以优化
-		// 多个Refuse回应会多次重制为Follower
-		if rf.Role == Candidate { // 这样Follower就只需要重置一次
+	if reply.Term > rf.CurTerm {
+		if rf.Role != Follower {
 			rf.RoleChange(Follower, reply.Term)
 		}
-	} else if reply.BallotState == Limited {
+	} else if reply.Term < rf.CurTerm {
 
+	} else if reply.Term == rf.CurTerm {
+		if reply.BallotState == Normal {
+			*num++
+			if *num > (len(rf.peers) / 2) {
+				if rf.Role == Leader {
+					return true
+				}
+				rf.RoleChange(Leader, rf.CurTerm)
+				rf.sendAllHeartbeat()
+				*num = 0
+			}
+		}
 	}
+
+	//if reply.BallotState == Normal && reply.Term == rf.CurTerm{ // 可能会造成Normal的选票是几个轮次之前投的票，而现在收到；然而现在该节点已经变成一个Follower了，却一下晋升Leader
+	//	*num++
+	//	if *num > (len(rf.peers) / 2) {
+	//		if rf.Role == Leader { // 已经是Leader直接返回
+	//			return true
+	//		}
+	//		rf.RoleChange(Leader, rf.CurTerm) // 不是则重置身份
+	//		rf.sendAllHeartbeat()             // 立即向所有人发送一次心跳
+	//		*num = 0
+	//	}
+	//} else if reply.BallotState == Voted && reply.Term == rf.CurTerm{
+	//
+	//} else if reply.BallotState == Refuse && reply.Term == rf.CurTerm{ // Refuse 和 Vote 本质是一样的，可以优化
+	//	// 多个Refuse回应会多次重制为Follower
+	//	// 加上reply 和 rf.CurTerm的验证可以使得不会在以前
+	//	if rf.Role == Candidate { // 这样Follower就只需要重置一次
+	//		rf.RoleChange(Follower, reply.Term)
+	//	}
+	//} else if reply.BallotState == Limited {
+	//
+	//} else if reply.Term > rf.CurTerm{
+	//
+	//}
 	rf.Info("rpc Vote: node id: %+v, node term: %+v, node ballotState: %v", server, reply.Term, reply.BallotState)
 	return ok
 }

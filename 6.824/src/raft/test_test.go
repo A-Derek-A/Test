@@ -975,6 +975,13 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.end()
 }
 
+func TestHundredsFigure8Unreliable(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		TestFigure8Unreliable2C(t)
+	}
+	fmt.Println("all pass.......................")
+}
+
 func internalChurn(t *testing.T, unreliable bool) {
 
 	servers := 5
