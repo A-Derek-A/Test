@@ -88,7 +88,7 @@ type Raft struct {
 	CommittedIndex    int           // 已提交的日志索引号
 	PeersInfo         []PInfo       // 用于存放对等节点的信息，包括 matchIndex，nextIndex
 	applyCh           chan ApplyMsg // 用于给tester发送命令已经committed的消息
-	ApplyPoint        int           // 已经被提交到Tester的指针
+	ApplyPoint        int           // 已经被提交到Tester的指针 *可能需要给该变量加一个特别的锁
 	LastIncludedIndex int           // 快照最后一个删除元素的Index
 	LastIncludedTerm  int           // 快照最后一个删除元素的Term
 	//Point          int           // 当前指向logs最新的指针，
@@ -135,7 +135,7 @@ type AppendEntriesReply struct {
 	// (2B)
 }
 
-type SnapShotReq struct {
+type SnapShotArgs struct {
 	Term              int    // Leader的任期号
 	LeaderId          int    // Leader的Id
 	LastIncludedIndex int    // 最后一个被快照包含的条目信息
@@ -145,7 +145,7 @@ type SnapShotReq struct {
 	// Offset            int
 }
 
-type SnapShotResp struct {
+type SnapShotReply struct {
 	Term     int
 	ServerId int
 }
@@ -204,11 +204,26 @@ func (rf *Raft) persist() {
 	e.Encode(rf.CurTerm)
 	e.Encode(rf.VoteState)
 	e.Encode(rf.Support)
-	e.Encode(rf.ApplyPoint)
+	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	e.Encode(rf.LastIncludedIndex)
+	e.Encode(rf.LastIncludedTerm)
 	e.Encode(rf.Logs)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+}
 
+func (rf *Raft) persistwithsnapshot(snapshot []byte) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurTerm)
+	e.Encode(rf.VoteState)
+	e.Encode(rf.Support)
+	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	e.Encode(rf.LastIncludedIndex)
+	e.Encode(rf.LastIncludedTerm)
+	e.Encode(rf.Logs)
+	data := w.Bytes()
+	rf.persister.SaveStateAndSnapshot(data, snapshot)
 }
 
 // restore previously persisted state.
@@ -224,16 +239,23 @@ func (rf *Raft) readPersist(data []byte) {
 	var votestate bool
 	var support int
 	var applypoint int
+	var lastincludedindex int
+	var lastincludedterm int
 	var logs []Entry
 	d.Decode(&curterm)
 	d.Decode(&votestate)
 	d.Decode(&support)
 	d.Decode(&applypoint)
+	d.Decode(&lastincludedindex)
+	d.Decode(&lastincludedterm)
 	d.Decode(&logs)
 	rf.CurTerm = curterm
 	rf.VoteState = votestate
 	rf.Support = support
 	rf.ApplyPoint = applypoint
+	rf.LastIncludedIndex = lastincludedindex
+	rf.LastIncludedTerm = lastincludedterm
+	rf.CommittedIndex = rf.LastIncludedIndex // 从Crash恢复后CommittedIndex就是LastIncludedIndex
 	rf.Logs = logs
 }
 
@@ -241,7 +263,6 @@ func (rf *Raft) readPersist(data []byte) {
 // have more recent info since it communicate the snapshot on applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	// Your code here (2D).
-
 	return true
 }
 
@@ -251,7 +272,16 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if index <= rf.LastIncludedIndex {
+		return
+	}
+	rf.Logs = append([]Entry{}, rf.Logs[index-rf.LastIncludedIndex:]...)
+	rf.Logs[0].Term = 0      // 哨兵节点任期为0
+	rf.Logs[0].Command = nil // 命令为空
+	rf.persist()
 }
 
 func (rf *Raft) ApplyLogs() {
@@ -263,7 +293,7 @@ func (rf *Raft) ApplyLogs() {
 			continue
 		}
 		rf.mu.Unlock()
-		for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ {
+		for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ { // ApplyPoint不断变化而且没加上锁，可能导致race问题
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
 				Command:      rf.Logs[i+1].Command,
@@ -491,6 +521,55 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 	return
 }
 
+func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 收到安装快照应该同样是为收到Leader节点的心跳
+	changeFlag := false
+	switch {
+	case args.Term < rf.CurTerm:
+		rf.Info("node %d, request outdate", args.LeaderId)
+	case args.Term > rf.CurTerm:
+		if rf.Role != Follower {
+			rf.RoleChange(Follower, args.Term)
+			changeFlag = true
+		}
+		fallthrough
+	case args.Term == rf.CurTerm:
+		if !changeFlag {
+			rf.Timer.Reset(rf.Period)
+		}
+		if rf.LastIncludedIndex >= args.LastIncludedIndex {
+			rf.Info("Server: %d, LastIncludedIndex: %d", rf.me, rf.LastIncludedIndex)
+			break
+		}
+		if args.LastIncludedIndex-rf.LastIncludedTerm >= len(rf.Logs)-1 {
+			rf.Logs = append([]Entry{}, rf.Logs[len(rf.Logs)-1:]...) // 把最后一个Logs变成logs[0]
+			rf.CommittedIndex = args.LastIncludedIndex               // 此时LastIncludedIndex 一定比 CommittedIndex更大
+		} else if args.LastIncludedIndex-rf.LastIncludedIndex < len(rf.Logs)-1 {
+			rf.Logs = append([]Entry{}, rf.Logs[args.LastIncludedIndex-rf.LastIncludedIndex:]...)
+			rf.CommittedIndex = Max(rf.CommittedIndex, args.LastIncludedIndex) // Snapshot和本身的Commit哪个更大，哪个就是CommittedIndex
+		}
+		rf.Logs[0].Term = 0
+		rf.Logs[0].Command = nil
+		rf.LastIncludedIndex = args.LastIncludedIndex
+		rf.LastIncludedTerm = args.LastIncludedTerm
+
+		rf.persistwithsnapshot(args.Data)
+		go func(snapshot []byte, index, term int) {
+			rf.applyCh <- ApplyMsg{
+				CommandValid:  false,
+				SnapshotValid: true,
+				SnapshotIndex: index,
+				SnapshotTerm:  term,
+				Snapshot:      snapshot,
+			}
+		}(args.Data, rf.LastIncludedIndex, rf.LastIncludedTerm) // 异步提交，防止阻塞
+	}
+	reply.Term = rf.CurTerm
+	reply.ServerId = rf.me
+}
+
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
@@ -658,6 +737,30 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	//	rf.RoleChange(Follower, reply.Term)
 	//	return false
 	//}
+	return ok
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *SnapShotArgs, reply *SnapShotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	if !ok {
+		rf.Error("rpc Call Error in sendInstallSnapshot function : send to %+v, %+v", server, ok)
+		return ok
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	defer rf.persistwithsnapshot(args.Data) // 持久化状态和快照
+
+	if reply.Term < rf.CurTerm {
+		rf.Info("server: %d, outdated info", reply.ServerId)
+	} else if reply.Term > rf.CurTerm {
+		if rf.Role != Follower {
+			rf.RoleChange(Follower, reply.Term)
+		}
+	} else if reply.Term == rf.CurTerm { // 因为被删除掉的日志一定已经提交了，所以不需要统计投票等行为
+		rf.PeersInfo[server].MatchIndex = rf.LastIncludedIndex
+		rf.PeersInfo[server].NextIndex = rf.LastIncludedIndex + 1
+	}
 	return ok
 }
 
