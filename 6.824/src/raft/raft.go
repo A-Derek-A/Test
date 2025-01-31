@@ -724,7 +724,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			}
 		}
 		//rf.PeersInfo[server].MatchIndex = reply.MatchIndex
-		rf.PeersInfo[server].MatchIndex = Min(reply.MatchIndex, len(rf.Logs)-1)
+		rf.PeersInfo[server].MatchIndex = Min(reply.MatchIndex, rf.LastIncludedIndex+len(rf.Logs)-1) // 暂时...
 		rf.PeersInfo[server].NextIndex = rf.PeersInfo[server].MatchIndex + 1
 		// 如果Follower中的日志数量大于Leader节点的数量，那么我们需要去其最小值
 
@@ -768,7 +768,7 @@ func (rf *Raft) sendInstallSnapshot(server int, args *SnapShotArgs, reply *SnapS
 	return ok
 }
 
-func (rf *Raft) sendAllHeartbeat() {
+func (rf *Raft) sendAllHeartbeat() { // 2D
 	if rf.Role != Leader {
 		rf.Warning("only a leader could sendheartbeat")
 	}
@@ -807,7 +807,7 @@ func (rf *Raft) sendAllHeartbeat() {
 	}
 }
 
-func (rf *Raft) sendAllVote() {
+func (rf *Raft) sendAllVote() { // 2D
 	BallotNum := 1
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -816,8 +816,8 @@ func (rf *Raft) sendAllVote() {
 		args := RequestVoteArgs{
 			Term:         rf.CurTerm,
 			Me:           rf.me,
-			LastLogIndex: len(rf.Logs) - 1,
-			LastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
+			LastLogIndex: rf.LastIncludedIndex + len(rf.Logs) - 1, // 实际的LastLogIndex
+			LastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,            // 最后的Term
 		}
 
 		// 添加选举Last
