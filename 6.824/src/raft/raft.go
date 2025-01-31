@@ -119,7 +119,7 @@ type AppendEntriesArgs struct {
 	LeaderTerm  int     // Leader的Term号
 	From        int     // 来自何方的ID号/心跳包时则是Leader的ID号
 	To          int     // 去往何处的ID号
-	PrevIndex   int     // Leader认为上一个发给Follower的索引
+	PrevIndex   int     // Leader认为上一个发给Follower的索引, 所有涉及PrevIndex都要考虑快照因素
 	PrevTerm    int     // Leader认为上一个发给Follower的Term号
 	CommitIndex int     // 已经提交的索引
 	Item        []Entry // 具体的Entry
@@ -414,7 +414,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// (2B)
-
+	// 应该注意到AE RPC只关注Logs中现存的日志，而已被存成快照的日志由InstallSnapshot完成
 	// 1.发送心跳包不应被视为当前任期内的一条日志被提交，即心跳包不是非空指令
 	// 2.只有收到集群上，一半的节点(>=len(peers)，因为它自己也算)当前任期内日志的AE回复，才能更改本节点的CommittedIndex，CommittedIndex为len(rf.Logs)
 	rf.mu.Lock()
@@ -451,15 +451,15 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		}
 
 		// Leader: {101,1}, {103,2}
-		// Follower: {101,1}, {102,1}, {103,1}, {104,1}
-		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex+1 <= len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex].Term) {
+		// Follower: {101,1}, {102,1}, {103,1}, {104,1} // 暂时...以下的条件判断是：Prev在日志中，或者打就是快照包含的最后一个
+		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex == rf.LastIncludedIndex && args.PrevTerm == rf.LastIncludedTerm) || (args.PrevIndex > rf.LastIncludedIndex && args.PrevIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-rf.LastIncludedTerm].Term) {
 			// PrevIndex为0，并且该节点日志为空，说明没有日志
 			// PrevIndex在本地日志中存在，并且能对上Term号
 			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
 			// 如果以上检查能通过，说明当前发来的日志包里是正确的包
 			rf.Info("run here!")
-			if args.PrevIndex+1 < len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index,但是不是最后一个，则后面的日志为无效日志 index + 1，存在哨兵
-				rf.Logs = rf.Logs[:args.PrevIndex+1] // index + 1，存在哨兵
+			if args.PrevIndex+1 < rf.LastIncludedIndex+len(rf.Logs) { // 如果 PrevIndex为日志中的一个Index,但是不是最后一个，则后面的日志为无效日志 index + 1，存在哨兵
+				rf.Logs = rf.Logs[:args.PrevIndex+1-rf.LastIncludedIndex] // index + 1，存在哨兵 暂时...
 			}
 			//emptyEntry := Entry{}
 			if len(args.Item) != 0 { // 不为空包
@@ -487,23 +487,24 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 			//} else {
 			//	rf.Warning("Follower Committed Index Error")
 			//}
-			rf.Info("args.CommitIndex: %d, logsLen: %d", args.CommitIndex, len(rf.Logs)-1)
-			rf.CommittedIndex = Min(args.CommitIndex, len(rf.Logs)-1) // index + 1，存在哨兵
+			rf.Info("args.CommitIndex: %d, logsLen: %d", args.CommitIndex, rf.LastIncludedIndex+len(rf.Logs)-1)
+			rf.CommittedIndex = Min(args.CommitIndex, rf.LastIncludedIndex+len(rf.Logs)-1) // index + 1，存在哨兵
 			if len(args.Item) != 0 {
-				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, len(rf.Logs)-1, args.Item) // index + 1，存在哨兵
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: %+v", rf.CommittedIndex, rf.LastIncludedIndex+len(rf.Logs)-1, args.Item) // index + 1，存在哨兵
 			} else {
-				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, len(rf.Logs)-1) // index + 1，存在哨兵
+				rf.Success("rf.CommittedIndex: %d, rf.MatchIndex: %d, Cmd: []", rf.CommittedIndex, rf.LastIncludedIndex+len(rf.Logs)-1) // index + 1，存在哨兵
 			}
 			reply.State = true
-			reply.MatchIndex = len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
+			reply.MatchIndex = rf.LastIncludedIndex + len(rf.Logs) - 1 // 直接告知该节点的MatchIndex index + 1，存在哨兵
 			rf.Info("MatchIndex increase: %d", reply.MatchIndex)
 			// 空日志或者PrevIndex和PrevTerm都能对得上，那么MatchIndex才是目前日志最后一个
 		} else {
-			if args.PrevIndex+1 <= len(rf.Logs) {
-				nowTerm := rf.Logs[args.PrevIndex].Term
-				ind := args.PrevIndex
+			if args.PrevIndex > rf.LastIncludedIndex && args.PrevIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) { // 日志中存在一条日志，但是日志号不对
+				// PrevIndex 是出了0下标以外的所有日志
+				nowTerm := rf.Logs[args.PrevIndex-rf.LastIncludedIndex].Term
+				ind := args.PrevIndex - rf.LastIncludedIndex
 				PreFlag := true
-				for ind > 0 && ind > rf.CommittedIndex && rf.Logs[ind].Term == nowTerm {
+				for ind > rf.LastIncludedIndex && ind > rf.CommittedIndex && rf.Logs[ind].Term == nowTerm {
 					PreFlag = false
 					ind--
 				}
@@ -513,8 +514,8 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 				} else {
 					rf.Info("MatchIndex decrease from args.PrevIndex: %d to now: %d", args.PrevIndex, reply.MatchIndex)
 				}
-			} else {
-				reply.MatchIndex = len(rf.Logs) - 1
+			} else { // Prev大于最后一条日志的下标，或者小于等于Last的下标 暂时...
+				reply.MatchIndex = rf.LastIncludedIndex + len(rf.Logs) - 1
 				rf.Info("MatchIndex decrease lot : %d", reply.MatchIndex)
 			}
 			reply.State = false
