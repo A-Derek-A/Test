@@ -272,8 +272,8 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 
 	if index <= rf.LastIncludedIndex {
 		return
@@ -281,7 +281,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.Logs = append([]Entry{}, rf.Logs[index-rf.LastIncludedIndex:]...)
 	rf.Logs[0].Term = 0      // 哨兵节点任期为0
 	rf.Logs[0].Command = nil // 命令为空
-	rf.persist()
+	rf.persistwithsnapshot(snapshot)
 }
 
 func (rf *Raft) ApplyLogs() {
@@ -330,13 +330,16 @@ type RequestVoteReply struct {
 // CheckLog 目前仅在RequestVote里使用，所以不需要加锁
 func (rf *Raft) CheckLog(argsTerm, argsLastLogIndex int) bool {
 	// 需要新增索引检查在最开始时，Logs是长度为0的记录
-	if len(rf.Logs)-1 == 0 { // 如果目前没有Logs记录，那么直接返回true index + 1，存在哨兵
+	if len(rf.Logs)-1 == 0 && rf.LastIncludedIndex == 0 { // 如果目前没有Logs记录，那么直接返回true index + 1，存在哨兵
 		return true
 	}
-	if rf.Logs[len(rf.Logs)-1].Term > argsTerm {
+	if (rf.LastIncludedIndex != 0 && len(rf.Logs) == 1 && rf.LastIncludedTerm > argsTerm) || (rf.Logs[len(rf.Logs)-1].Term > argsTerm) {
+		// 当目前日志里没有记录并且LastIncludedIndex不为0 check
+		// 最后一条日志Term大于args
 		return false
-	} else if rf.Logs[len(rf.Logs)-1].Term == argsTerm {
-		if len(rf.Logs)-1 > argsLastLogIndex { // index + 1，存在哨兵
+	} else if (rf.LastIncludedIndex != 0 && len(rf.Logs) == 1 && rf.LastIncludedTerm == argsTerm) || (rf.Logs[len(rf.Logs)-1].Term == argsTerm) {
+		if rf.LastIncludedIndex+len(rf.Logs)-1 > argsLastLogIndex { // index + 1，存在哨兵
+			// 最后包括的Index加上日志里现存的
 			return false
 		}
 	}
@@ -758,7 +761,7 @@ func (rf *Raft) sendInstallSnapshot(server int, args *SnapShotArgs, reply *SnapS
 			rf.RoleChange(Follower, reply.Term)
 		}
 	} else if reply.Term == rf.CurTerm { // 因为被删除掉的日志一定已经提交了，所以不需要统计投票等行为
-		rf.PeersInfo[server].MatchIndex = rf.LastIncludedIndex
+		rf.PeersInfo[server].MatchIndex = rf.LastIncludedIndex // 暂时只在term正确时修改Match和Next
 		rf.PeersInfo[server].NextIndex = rf.LastIncludedIndex + 1
 	}
 	return ok
@@ -926,9 +929,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Logs:      make([]Entry, 1), //假设存在一个哨兵节点
 		PeersInfo: make([]PInfo, 0),
 		//Point:          -1,	// Point代表了已经存入的指针位置，初始为-1，代表尚未有任何日志存入
-		CommittedIndex: 0,
-		ApplyPoint:     0,
-		applyCh:        applyCh,
+		CommittedIndex:    0,
+		ApplyPoint:        0,
+		applyCh:           applyCh,
+		LastIncludedIndex: 0, // 初始化Index为0 ...暂时
+		LastIncludedTerm:  0, // 初始化Term为0 ...暂时
 	}
 	rf.peers = peers
 	rf.persister = persister
