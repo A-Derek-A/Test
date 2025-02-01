@@ -1182,7 +1182,9 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// make sure all followers have caught up, so that
 			// an InstallSnapshot RPC isn't required for
 			// TestSnapshotBasic2D().
-			cfg.one(rand.Int(), servers, true)
+			fmt.Printf("nowIter: %d\n", i)
+			cfg.one(rand.Int(), servers, true) // first
+			fmt.Printf("nowIter: %d, success\n", i)
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}

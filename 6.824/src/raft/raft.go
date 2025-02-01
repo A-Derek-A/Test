@@ -91,6 +91,7 @@ type Raft struct {
 	ApplyPoint        int           // 已经被提交到Tester的指针 *可能需要给该变量加一个特别的锁
 	LastIncludedIndex int           // 快照最后一个删除元素的Index
 	LastIncludedTerm  int           // 快照最后一个删除元素的Term
+	// ApplyMu           sync.Mutex    // 涉及到ApplyPoint的部分单独加锁，暂时
 	//Point          int           // 当前指向logs最新的指针，
 
 	// Your data here (2A, 2B, 2C).
@@ -204,7 +205,9 @@ func (rf *Raft) persist() {
 	e.Encode(rf.CurTerm)
 	e.Encode(rf.VoteState)
 	e.Encode(rf.Support)
+	// rf.ApplyMu.Lock()
 	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	// rf.ApplyMu.Unlock()
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
 	e.Encode(rf.Logs)
@@ -218,7 +221,9 @@ func (rf *Raft) persistwithsnapshot(snapshot []byte) {
 	e.Encode(rf.CurTerm)
 	e.Encode(rf.VoteState)
 	e.Encode(rf.Support)
+	// rf.ApplyMu.Lock()
 	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	// rf.ApplyMu.Unlock()
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
 	e.Encode(rf.Logs)
@@ -252,7 +257,9 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.CurTerm = curterm
 	rf.VoteState = votestate
 	rf.Support = support
+	// rf.ApplyMu.Lock()
 	rf.ApplyPoint = applypoint
+	// rf.ApplyMu.Unlock()
 	rf.LastIncludedIndex = lastincludedindex
 	rf.LastIncludedTerm = lastincludedterm
 	rf.CommittedIndex = rf.LastIncludedIndex // 从Crash恢复后CommittedIndex就是LastIncludedIndex
@@ -270,37 +277,68 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
+func (rf *Raft) Snapshot(index int, snapshot []byte) { // 涉及LastIncludedIndex，修改了Logs，持久化
 	// Your code here (2D).
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
 
-	if index <= rf.LastIncludedIndex {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 尝试加锁
+	if index <= rf.LastIncludedIndex { // index > rf.LastIncludedIndex才行，也就是必然存在一条日志
 		return
 	}
 	rf.Logs = append([]Entry{}, rf.Logs[index-rf.LastIncludedIndex:]...)
+	// 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+	rf.Info("index: %d, LastIncludedIndex: %d", index, rf.LastIncludedIndex)
+	rf.LastIncludedIndex = index
+	rf.LastIncludedTerm = rf.Logs[0].Term
 	rf.Logs[0].Term = 0      // 哨兵节点任期为0
 	rf.Logs[0].Command = nil // 命令为空
 	rf.persistwithsnapshot(snapshot)
 }
 
 func (rf *Raft) ApplyLogs() {
-	for rf.killed() == false {
+	// 在该环境中，即使服务器down了也会将已经进入的循环完成
+	for rf.killed() == false { //
 		rf.mu.Lock()
+		// rf.ApplyMu.Lock()
+		ind := rf.ApplyPoint
 		if rf.CommittedIndex <= rf.ApplyPoint {
+			// rf.ApplyMu.Unlock()
 			rf.mu.Unlock()
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		rf.mu.Unlock()
-		for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ { // ApplyPoint不断变化而且没加上锁，可能导致race问题
+		// rf.ApplyMu.Unlock() // 释放Apply锁
+		tempLogs := make([]Entry, rf.CommittedIndex-rf.ApplyPoint)
+		rf.Info("ApplyPoint: %d, CommittedIndex: %d", rf.ApplyPoint, rf.CommittedIndex)
+		copy(tempLogs, rf.Logs[rf.ApplyPoint-rf.LastIncludedIndex+1:rf.CommittedIndex-rf.LastIncludedIndex+1]) // ApplyPoint下一个，包括CommittedIndex
+		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 1, MatchIndex: 11, NextIndex: 12
+		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 0, MatchIndex: 12, NextIndex: 13
+		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 1, MatchIndex: 12, NextIndex: 13
+		//panic: runtime error: slice bounds out of range [:13] with capacity 6
+		rf.ApplyPoint = rf.CommittedIndex
+		rf.mu.Unlock() // 提交时已经释放锁资源
+
+		// rf.ApplyMu.Lock()
+		//rf.ApplyMu.Unlock()
+		for _, v := range tempLogs {
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.Logs[i+1].Command,
-				CommandIndex: i + 1, // index + 1，存在哨兵
+				Command:      v.Command,
+				CommandIndex: ind + 1,
 			}
-			rf.ApplyPoint++
+			ind++
 		}
+		//for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ { // ApplyPoint不断变化而且没加上锁，可能导致race问题
+		//	//rf.ApplyMu.Lock()
+		//	rf.applyCh <- ApplyMsg{ // 涉及提交
+		//		CommandValid: true,
+		//		Command:      rf.Logs[i+1].Command,
+		//		CommandIndex: i + 1, // index + 1，存在哨兵
+		//	}
+		//	rf.ApplyPoint++
+		//	//rf.ApplyMu.Unlock()
+		//}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -452,7 +490,8 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 
 		// Leader: {101,1}, {103,2}
 		// Follower: {101,1}, {102,1}, {103,1}, {104,1} // 暂时...以下的条件判断是：Prev在日志中，或者打就是快照包含的最后一个
-		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex == rf.LastIncludedIndex && args.PrevTerm == rf.LastIncludedTerm) || (args.PrevIndex > rf.LastIncludedIndex && args.PrevIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-rf.LastIncludedTerm].Term) {
+		rf.Info("lenLogs: %d, LastIncludedIndex: %d, LastIncludedTerm: %d, args: %+v", len(rf.Logs), rf.LastIncludedIndex, rf.LastIncludedTerm, args)
+		if (args.PrevIndex == 0 && len(rf.Logs) == 1) || (args.PrevIndex == rf.LastIncludedIndex && args.PrevTerm == rf.LastIncludedTerm) || (args.PrevIndex > rf.LastIncludedIndex && args.PrevIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) && args.PrevTerm == rf.Logs[args.PrevIndex-rf.LastIncludedIndex].Term) {
 			// PrevIndex为0，并且该节点日志为空，说明没有日志
 			// PrevIndex在本地日志中存在，并且能对上Term号
 			// 有可能本地Log中的日志存在更靠后的Index，但是该条日志必然因为之前的宕机而保存失败，因为大部分节点都不存在该条日志而选举其他节点成功
@@ -560,7 +599,7 @@ func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
 		rf.LastIncludedTerm = args.LastIncludedTerm
 
 		rf.persistwithsnapshot(args.Data)
-		go func(snapshot []byte, index, term int) {
+		go func(snapshot []byte, index, term int) { // 涉及snapshot的提交和管道
 			rf.applyCh <- ApplyMsg{
 				CommandValid:  false,
 				SnapshotValid: true,
@@ -777,33 +816,49 @@ func (rf *Raft) sendAllHeartbeat() { // 2D
 		if i == rf.me {
 			continue
 		}
-		// 查看Leader节点日志进度，如果已经出现Peer所需要的NextIndex那么在Item里填装好
-		tempEntry := make([]Entry, Max(len(rf.Logs)-rf.PeersInfo[i].NextIndex, 0))
-		//tempEntry := Entry{}
-		rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
-		rf.Info("len rfLogs: %d", len(rf.Logs))
-		if rf.PeersInfo[i].NextIndex+1 <= len(rf.Logs) { // index + 1，存在哨兵
-			//tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex:] // 可能需要改成一个数组
-			copy(tempEntry, rf.Logs[rf.PeersInfo[i].NextIndex:])
+		if rf.PeersInfo[i].NextIndex > rf.LastIncludedIndex { // 暂时... 要发的下一个日志在内存中
+			// 查看Leader节点日志进度，如果已经出现Peer所需要的NextIndex那么在Item里填装好
+			tempEntry := make([]Entry, Max(rf.LastIncludedIndex+len(rf.Logs)-rf.PeersInfo[i].NextIndex, 0)) // 暂时...
+			//tempEntry := Entry{}
+			rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
+			rf.Info("len rfLogs: %d", len(rf.Logs))
+			if rf.PeersInfo[i].NextIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) { // index + 1，存在哨兵 暂时...
+				//tempEntry = rf.Logs[rf.PeersInfo[i].NextIndex:] // 可能需要改成一个数组
+				copy(tempEntry, rf.Logs[rf.PeersInfo[i].NextIndex-rf.LastIncludedIndex:]) // 暂时...
+			}
+			rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
+			args := AppendEntriesArgs{
+				From:        rf.me,
+				To:          i,
+				LeaderTerm:  rf.CurTerm,
+				Item:        tempEntry,
+				PrevIndex:   rf.PeersInfo[i].MatchIndex,
+				CommitIndex: rf.CommittedIndex,
+			}
+			rf.Info("function: sendAllHeartbeat---in memory, server: %d, to: %d, content: %+v", args.From, args.To, args.Item)
+			if args.PrevIndex == 0 { // 没有日志
+				args.PrevTerm = 0
+			} else if len(rf.Logs) == 1 { // 内存中没有日志
+				args.PrevTerm = rf.LastIncludedTerm
+			} else { // 内存中有日志
+				args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex-rf.LastIncludedIndex].Term // index + 1，存在哨兵 暂时...
+			}
+			rf.Trace("args.PrevTerm: %v", args.PrevTerm)
+			reply := AppendEntriesReply{}
+			go rf.sendAppendEntries(i, &args, &reply, &tempNum)
+		} else if rf.PeersInfo[i].NextIndex <= rf.LastIncludedIndex { // 暂时... 要发的下一个日志包含在快照中
+			args := SnapShotArgs{
+				Term:              rf.CurTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.LastIncludedIndex,
+				LastIncludedTerm:  rf.LastIncludedTerm,
+				Done:              true,
+				Data:              rf.persister.ReadSnapshot(),
+			}
+			reply := SnapShotReply{}
+			rf.Info("function: sendAllHeartbeat---snapshot, server: %d, to: %d", args.LeaderId, i)
+			go rf.sendInstallSnapshot(i, &args, &reply)
 		}
-		rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
-		args := AppendEntriesArgs{
-			From:        rf.me,
-			To:          i,
-			LeaderTerm:  rf.CurTerm,
-			Item:        tempEntry,
-			PrevIndex:   rf.PeersInfo[i].MatchIndex,
-			CommitIndex: rf.CommittedIndex,
-		}
-		rf.Info("%+v", args.Item)
-		if args.PrevIndex == 0 {
-			args.PrevTerm = 0
-		} else {
-			args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex].Term // index + 1，存在哨兵
-		}
-		rf.Trace("args.PrevTerm: %v", args.PrevTerm)
-		reply := AppendEntriesReply{}
-		go rf.sendAppendEntries(i, &args, &reply, &tempNum)
 	}
 }
 
@@ -817,7 +872,13 @@ func (rf *Raft) sendAllVote() { // 2D
 			Term:         rf.CurTerm,
 			Me:           rf.me,
 			LastLogIndex: rf.LastIncludedIndex + len(rf.Logs) - 1, // 实际的LastLogIndex
-			LastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,            // 最后的Term
+		}
+		if len(rf.Logs) == 1 && rf.LastIncludedIndex != 0 { // 暂时...
+			args.LastLogTerm = rf.LastIncludedTerm
+		} else if len(rf.Logs) == 1 {
+			args.LastLogTerm = 0
+		} else {
+			args.LastLogTerm = rf.Logs[len(rf.Logs)-1].Term // 最后的Term
 		}
 
 		// 添加选举Last
