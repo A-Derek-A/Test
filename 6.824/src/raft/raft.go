@@ -301,6 +301,7 @@ func (rf *Raft) ApplyLogs() {
 	for rf.killed() == false { //
 		rf.mu.Lock()
 		// rf.ApplyMu.Lock()
+		Flag := true
 		ind := rf.ApplyPoint
 		if rf.CommittedIndex <= rf.ApplyPoint {
 			// rf.ApplyMu.Unlock()
@@ -310,24 +311,36 @@ func (rf *Raft) ApplyLogs() {
 		}
 		// rf.ApplyMu.Unlock() // 释放Apply锁
 		tempLogs := make([]Entry, rf.CommittedIndex-rf.ApplyPoint)
-		rf.Info("ApplyPoint: %d, CommittedIndex: %d", rf.ApplyPoint, rf.CommittedIndex)
-		copy(tempLogs, rf.Logs[rf.ApplyPoint-rf.LastIncludedIndex+1:rf.CommittedIndex-rf.LastIncludedIndex+1]) // ApplyPoint下一个，包括CommittedIndex
-		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 1, MatchIndex: 11, NextIndex: 12
-		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 0, MatchIndex: 12, NextIndex: 13
-		//2025/02/02 00:10:36.832 [TRAC]  Node Info > raft.Id : 2, raft.Term : 1, raft.Role : Leader |  server: 1, MatchIndex: 12, NextIndex: 13
-		//panic: runtime error: slice bounds out of range [:13] with capacity 6
+		if rf.LastIncludedIndex <= rf.ApplyPoint { // 还未被应用的cmd被做成快照
+			rf.Info("ApplyPoint: %d, CommittedIndex: %d, LastIncludedIndex: %d", rf.ApplyPoint, rf.CommittedIndex, rf.LastIncludedIndex)
+			copy(tempLogs, rf.Logs[rf.ApplyPoint-rf.LastIncludedIndex+1:rf.CommittedIndex-rf.LastIncludedIndex+1]) // ApplyPoint下一个，包括CommittedIndex
+		} else {
+			rf.Info("ApplyPoint: %d, CommittedIndex: %d, LastIncludedIndex: %d", rf.ApplyPoint, rf.CommittedIndex, rf.LastIncludedIndex)
+			Flag = false
+		}
+
 		rf.ApplyPoint = rf.CommittedIndex
 		rf.mu.Unlock() // 提交时已经释放锁资源
 
 		// rf.ApplyMu.Lock()
 		//rf.ApplyMu.Unlock()
-		for _, v := range tempLogs {
-			rf.applyCh <- ApplyMsg{
-				CommandValid: true,
-				Command:      v.Command,
-				CommandIndex: ind + 1,
+		if Flag { // Flag为true代表尚未被应用的日志仍在内存中
+			for _, v := range tempLogs {
+				rf.applyCh <- ApplyMsg{
+					CommandValid: true,
+					Command:      v.Command,
+					CommandIndex: ind + 1,
+				}
+				ind++
 			}
-			ind++
+		} else { // 日志已经被存成快照了
+			rf.applyCh <- ApplyMsg{
+				CommandValid:  false,
+				SnapshotValid: true,
+				SnapshotIndex: rf.LastIncludedIndex,
+				SnapshotTerm:  rf.LastIncludedTerm,
+				Snapshot:      rf.persister.ReadSnapshot(),
+			}
 		}
 		//for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ { // ApplyPoint不断变化而且没加上锁，可能导致race问题
 		//	//rf.ApplyMu.Lock()
