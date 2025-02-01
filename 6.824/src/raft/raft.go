@@ -835,10 +835,10 @@ func (rf *Raft) sendAllHeartbeat() { // 2D
 				PrevIndex:   rf.PeersInfo[i].MatchIndex,
 				CommitIndex: rf.CommittedIndex,
 			}
-			rf.Info("function: sendAllHeartbeat---in memory, server: %d, to: %d, content: %+v", args.From, args.To, args.Item)
+			rf.Info("function: sendAllHeartbeat---in memory, server: %d, to: %d, content: %+v, LastIncludedIndex: %d", args.From, args.To, args.Item, rf.LastIncludedIndex)
 			if args.PrevIndex == 0 { // 没有日志
 				args.PrevTerm = 0
-			} else if len(rf.Logs) == 1 { // 内存中没有日志
+			} else if len(rf.Logs) == 1 || rf.PeersInfo[i].MatchIndex-rf.LastIncludedIndex == 0 { // 内存中没有日志，接下来只需要发送心跳包；或者内存中有一个日志，他的前一个是快照
 				args.PrevTerm = rf.LastIncludedTerm
 			} else { // 内存中有日志
 				args.PrevTerm = rf.Logs[rf.PeersInfo[i].MatchIndex-rf.LastIncludedIndex].Term // index + 1，存在哨兵 暂时...
@@ -917,7 +917,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Term:    rf.CurTerm,
 		Command: command,
 	})
-	index = len(rf.Logs) - 1
+	index = rf.LastIncludedIndex + len(rf.Logs) - 1
 	term = rf.CurTerm
 	// Your code here (2B).
 
