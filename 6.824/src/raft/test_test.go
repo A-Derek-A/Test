@@ -975,12 +975,12 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.end()
 }
 
-func TestHundredsFigure8Unreliable(t *testing.T) {
-	for i := 0; i < 50; i++ {
-		TestFigure8Unreliable2C(t)
-	}
-	fmt.Println("all pass.......................")
-}
+//func TestHundredsFigure8Unreliable(t *testing.T) {
+//	for i := 0; i < 50; i++ {
+//		TestFigure8Unreliable2C(t)
+//	}
+//	fmt.Println("all pass.......................")
+//}
 
 func internalChurn(t *testing.T, unreliable bool) {
 
@@ -1182,9 +1182,9 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// make sure all followers have caught up, so that
 			// an InstallSnapshot RPC isn't required for
 			// TestSnapshotBasic2D().
-			fmt.Printf("nowIter: %d\n", i)
+			//fmt.Printf("nowIter: %d\n", i)
 			cfg.one(rand.Int(), servers, true) // first
-			fmt.Printf("nowIter: %d, success\n", i)
+			//fmt.Printf("nowIter: %d, success\n", i)
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}
@@ -1221,26 +1221,32 @@ func TestSnapshotInstallUnreliable2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)", true, false, false)
 }
 
-func TestAllSnapUnreliable(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)", true, false, false)
-	}
-}
+//func TestAllSnapUnreliable(t *testing.T) {
+//	for i := 0; i < 20; i++ {
+//		snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)", true, false, false)
+//	}
+//}
 
 func TestSnapshotInstallCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
 	// 尚未创建快照的节点从快照中恢复时出错
 }
 
-func TestAllSnapCrash(t *testing.T) {
-	for i := 0; i < 50; i++ {
-		snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
-	}
-}
+//func TestAllSnapCrash(t *testing.T) {
+//	for i := 0; i < 50; i++ {
+//		snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
+//	}
+//}
 
 func TestSnapshotInstallUnCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
 }
+
+//func TestAllSnapUnCrash(t *testing.T) {
+//	for i := 0; i < 20; i++ {
+//		snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
+//	}
+//}
 
 // do the servers persist the snapshots, and
 // restart using snapshot along with the

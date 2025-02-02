@@ -20,6 +20,7 @@ package raft
 import (
 	"6.824/labgob"
 	"bytes"
+	"log"
 	"math/rand"
 	//	"bytes"
 	"sync"
@@ -293,7 +294,18 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) { // 涉及LastIncludedInde
 	rf.LastIncludedTerm = rf.Logs[0].Term
 	rf.Logs[0].Term = 0      // 哨兵节点任期为0
 	rf.Logs[0].Command = nil // 命令为空
+	rf.Info("Snapshot---index: %v, LastIncludedIndex: %v", index, rf.LastIncludedIndex)
 	rf.persistwithsnapshot(snapshot)
+	r := bytes.NewBuffer(rf.persister.ReadSnapshot())
+	d := labgob.NewDecoder(r)
+	var lastIncludedIndex int
+	var xlog []interface{}
+	if d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&xlog) != nil {
+		log.Fatalf("snapshot decode error")
+	}
+	rf.Info("Snapshot---index: %v, LastIncludedIndex: %v, decodeLastIncludedIndex: %v", index, rf.LastIncludedIndex, lastIncludedIndex)
+	return
 }
 
 func (rf *Raft) ApplyLogs() {
@@ -498,8 +510,8 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		// reply里的MatchIndex作为Follower节点来说可以等效为CommittedIndex
 
 		//rf.CommittedIndex = args.CommitIndex // 需要fix，因为CommittedIndex可能比MatchIndex还大因为日志是单个提交
-		if args.PrevIndex+1 <= len(rf.Logs) {
-			rf.Info("args.PrevIndex: %d, args.PrevTerm: %d, LogsIndex: %d, LogsTerm: %d", args.PrevIndex, args.PrevTerm, args.PrevIndex, rf.Logs[args.PrevIndex].Term)
+		if args.PrevIndex+1 <= rf.LastIncludedIndex+len(rf.Logs) {
+			rf.Info("args.PrevIndex: %d, args.PrevTerm: %d, LogsIndex: %d, LogsTerm: %d", args.PrevIndex, args.PrevTerm, args.PrevIndex, rf.Logs[args.PrevIndex-rf.LastIncludedIndex].Term)
 		} else {
 			rf.Info("args.PrevIndex: %d, args.PrevTerm: %d", args.PrevIndex, args.PrevTerm)
 		}
@@ -608,7 +620,7 @@ func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
 			rf.Info("Server: %d, LastIncludedIndex: %d", rf.me, rf.LastIncludedIndex)
 			break
 		}
-		if args.LastIncludedIndex-rf.LastIncludedTerm >= len(rf.Logs)-1 {
+		if args.LastIncludedIndex-rf.LastIncludedIndex >= len(rf.Logs)-1 {
 			rf.Logs = append([]Entry{}, rf.Logs[len(rf.Logs)-1:]...) // 把最后一个Logs变成logs[0]
 			rf.CommittedIndex = args.LastIncludedIndex               // 此时LastIncludedIndex 一定比 CommittedIndex更大
 		} else if args.LastIncludedIndex-rf.LastIncludedIndex < len(rf.Logs)-1 {
@@ -619,8 +631,10 @@ func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
 		rf.Logs[0].Command = nil
 		rf.LastIncludedIndex = args.LastIncludedIndex
 		rf.LastIncludedTerm = args.LastIncludedTerm
-
+		rf.Info("LastIncludedIndex Write: %d", rf.LastIncludedIndex)
 		rf.persistwithsnapshot(args.Data)
+		index := rf.LastIncludedIndex
+		ter := rf.LastIncludedTerm
 		go func(snapshot []byte, index, term int) { // 涉及snapshot的提交和管道
 			rf.applyCh <- ApplyMsg{
 				CommandValid:  false,
@@ -629,7 +643,7 @@ func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
 				SnapshotTerm:  term,
 				Snapshot:      snapshot,
 			}
-		}(args.Data, rf.LastIncludedIndex, rf.LastIncludedTerm) // 异步提交，防止阻塞
+		}(args.Data, index, ter) // 异步提交，防止阻塞
 	}
 	reply.Term = rf.CurTerm
 	reply.ServerId = rf.me
@@ -814,15 +828,24 @@ func (rf *Raft) sendInstallSnapshot(server int, args *SnapShotArgs, reply *SnapS
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer rf.persistwithsnapshot(args.Data) // 持久化状态和快照
+	defer rf.persist()
 
 	if reply.Term < rf.CurTerm {
 		rf.Info("server: %d, outdated info", reply.ServerId)
 	} else if reply.Term > rf.CurTerm {
-		if rf.Role != Follower {
-			rf.RoleChange(Follower, reply.Term)
-		}
+		rf.RoleChange(Follower, reply.Term)
 	} else if reply.Term == rf.CurTerm { // 因为被删除掉的日志一定已经提交了，所以不需要统计投票等行为
+		rf.Info("send install snapshot")
+		snapshot := rf.persister.ReadSnapshot()
+		r := bytes.NewBuffer(snapshot)
+		d := labgob.NewDecoder(r)
+		var lastIncludedIndex int
+		var xlog []interface{}
+		if d.Decode(&lastIncludedIndex) != nil ||
+			d.Decode(&xlog) != nil {
+			log.Fatalf("snapshot decode error")
+		}
+		rf.Info("%d, %d", rf.LastIncludedIndex, lastIncludedIndex)
 		rf.PeersInfo[server].MatchIndex = rf.LastIncludedIndex // 暂时只在term正确时修改Match和Next
 		rf.PeersInfo[server].NextIndex = rf.LastIncludedIndex + 1
 	}
@@ -830,6 +853,7 @@ func (rf *Raft) sendInstallSnapshot(server int, args *SnapShotArgs, reply *SnapS
 }
 
 func (rf *Raft) sendAllHeartbeat() { // 2D
+
 	if rf.Role != Leader {
 		rf.Warning("only a leader could sendheartbeat")
 	}
@@ -880,6 +904,17 @@ func (rf *Raft) sendAllHeartbeat() { // 2D
 				Done:              true,
 				Data:              rf.persister.ReadSnapshot(),
 			}
+			r := bytes.NewBuffer(args.Data)
+			d := labgob.NewDecoder(r)
+			var lastIncludedIndex int
+			var xlog []interface{}
+			if d.Decode(&lastIncludedIndex) != nil ||
+				d.Decode(&xlog) != nil {
+				log.Fatalf("snapshot decode error")
+			}
+			if args.LastIncludedIndex != lastIncludedIndex {
+				rf.Info("diff: argsLast: %d, decodeLast: %d", args.LastIncludedIndex, lastIncludedIndex)
+			}
 			reply := SnapShotReply{}
 			rf.Info("function: sendAllHeartbeat---snapshot, server: %d, to: %d", args.LeaderId, i)
 			go rf.sendInstallSnapshot(i, &args, &reply)
@@ -888,6 +923,7 @@ func (rf *Raft) sendAllHeartbeat() { // 2D
 }
 
 func (rf *Raft) sendAllVote() { // 2D
+
 	BallotNum := 1
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -977,6 +1013,7 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		<-rf.Timer.C
+		rf.mu.Lock()
 		switch rf.Role {
 		case Follower:
 			rf.RoleChange(Candidate, rf.CurTerm)
@@ -986,8 +1023,10 @@ func (rf *Raft) ticker() {
 			rf.CurTerm++       // 任期号+1
 			rf.Support = rf.me // 竞选支持者
 			rf.sendAllVote()
+			rf.mu.Unlock()
 		case Leader:
 			rf.sendAllHeartbeat()
+			rf.mu.Unlock()
 		}
 	}
 }
