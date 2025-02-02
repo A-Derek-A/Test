@@ -241,6 +241,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 			}
 
 			cfg.mu.Lock()
+			fmt.Printf("server %v lastAppied: %+v\n", i, cfg.lastApplied[i])
 			cfg.lastApplied[i] = m.CommandIndex
 			cfg.mu.Unlock()
 
@@ -490,15 +491,17 @@ func (cfg *config) checkNoLeader() {
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	var cmd interface{} = nil
-	//temp := cfg.logs
-	//fmt.Println("check all Logs")
-	//for ind := 0; ind < len(temp); ind++ {
-	//	fmt.Println("maybe server: ", ind)
-	//	fmt.Printf("Logs length: %d\n", len(temp[ind]))
-	//	for k, v := range temp[ind] {
-	//		fmt.Printf("key: %+v, value: %+v\n", k, v)
-	//	}
-	//}
+	cfg.mu.Lock()
+	temp := cfg.logs
+	fmt.Println("check all Logs")
+	for ind := 0; ind < len(temp); ind++ {
+		fmt.Println("maybe server: ", ind)
+		fmt.Printf("Logs length: %d\n", len(temp[ind]))
+		for k, v := range temp[ind] {
+			fmt.Printf("key: %+v, value: %+v\n", k, v)
+		}
+	}
+	cfg.mu.Unlock()
 
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.applyErr[i] != "" {
@@ -567,7 +570,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	t0 := time.Now()
 	starts := 0
-	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false {
+	for time.Since(t0).Seconds() < 6 && cfg.checkFinished() == false {
 		// try all the servers, maybe one is the leader.
 		index := -1
 		for si := 0; si < cfg.n; si++ {

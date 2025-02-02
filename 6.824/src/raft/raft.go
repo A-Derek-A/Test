@@ -206,7 +206,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.VoteState)
 	e.Encode(rf.Support)
 	// rf.ApplyMu.Lock()
-	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	// e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
 	// rf.ApplyMu.Unlock()
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
@@ -222,7 +222,7 @@ func (rf *Raft) persistwithsnapshot(snapshot []byte) {
 	e.Encode(rf.VoteState)
 	e.Encode(rf.Support)
 	// rf.ApplyMu.Lock()
-	e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
+	// e.Encode(rf.ApplyPoint) // 需要考虑ApplyPoint的竞争问题
 	// rf.ApplyMu.Unlock()
 	e.Encode(rf.LastIncludedIndex)
 	e.Encode(rf.LastIncludedTerm)
@@ -243,14 +243,14 @@ func (rf *Raft) readPersist(data []byte) {
 	var curterm int
 	var votestate bool
 	var support int
-	var applypoint int
+	// var applypoint int
 	var lastincludedindex int
 	var lastincludedterm int
 	var logs []Entry
 	d.Decode(&curterm)
 	d.Decode(&votestate)
 	d.Decode(&support)
-	d.Decode(&applypoint)
+	// d.Decode(&applypoint)
 	d.Decode(&lastincludedindex)
 	d.Decode(&lastincludedterm)
 	d.Decode(&logs)
@@ -258,7 +258,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.VoteState = votestate
 	rf.Support = support
 	// rf.ApplyMu.Lock()
-	rf.ApplyPoint = applypoint
+	// rf.ApplyPoint = applypoint
 	// rf.ApplyMu.Unlock()
 	rf.LastIncludedIndex = lastincludedindex
 	rf.LastIncludedTerm = lastincludedterm
@@ -314,24 +314,26 @@ func (rf *Raft) ApplyLogs() {
 		if rf.LastIncludedIndex <= rf.ApplyPoint { // 还未被应用的cmd被做成快照
 			rf.Info("ApplyPoint: %d, CommittedIndex: %d, LastIncludedIndex: %d", rf.ApplyPoint, rf.CommittedIndex, rf.LastIncludedIndex)
 			copy(tempLogs, rf.Logs[rf.ApplyPoint-rf.LastIncludedIndex+1:rf.CommittedIndex-rf.LastIncludedIndex+1]) // ApplyPoint下一个，包括CommittedIndex
+			rf.Info("tempLogs: %+v", tempLogs)
 		} else {
 			rf.Info("ApplyPoint: %d, CommittedIndex: %d, LastIncludedIndex: %d", rf.ApplyPoint, rf.CommittedIndex, rf.LastIncludedIndex)
 			Flag = false
 		}
 
-		rf.ApplyPoint = rf.CommittedIndex
-		rf.mu.Unlock() // 提交时已经释放锁资源
+		rf.ApplyPoint = rf.CommittedIndex // 此时
+		rf.mu.Unlock()                    // 提交时已经释放锁资源
 
 		// rf.ApplyMu.Lock()
 		//rf.ApplyMu.Unlock()
 		if Flag { // Flag为true代表尚未被应用的日志仍在内存中
 			for _, v := range tempLogs {
+				ind++
 				rf.applyCh <- ApplyMsg{
 					CommandValid: true,
 					Command:      v.Command,
-					CommandIndex: ind + 1,
+					CommandIndex: ind,
 				}
-				ind++
+				rf.Success("submit the command %d", ind)
 			}
 		} else { // 日志已经被存成快照了
 			rf.applyCh <- ApplyMsg{

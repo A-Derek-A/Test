@@ -1224,6 +1224,7 @@ func TestSnapshotInstallUnreliable2D(t *testing.T) {
 
 func TestSnapshotInstallCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
+	// 尚未创建快照的节点从快照中恢复时
 }
 
 func TestSnapshotInstallUnCrash2D(t *testing.T) {
