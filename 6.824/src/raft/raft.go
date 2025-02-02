@@ -481,6 +481,7 @@ func (rf *Raft) AppendEntry(args *AppendEntriesArgs, reply *AppendEntriesReply) 
 		reply.State = false // State语义变化，等待修改
 	case args.LeaderTerm > rf.CurTerm: // 当前节点的信息陈旧，需要更新
 		rf.RoleChange(Follower, args.LeaderTerm)
+		rf.VoteState = Lose
 		rf.Support = args.From
 		// reply.State = true						State 语义变化
 		flag = false
@@ -588,10 +589,16 @@ func (rf *Raft) InstallSnapshot(args *SnapShotArgs, reply *SnapShotReply) {
 	case args.Term < rf.CurTerm:
 		rf.Info("node %d, request outdate", args.LeaderId)
 	case args.Term > rf.CurTerm:
-		if rf.Role != Follower {
-			rf.RoleChange(Follower, args.Term)
-			changeFlag = true
-		}
+		//if rf.Role != Follower {
+		//	rf.RoleChange(Follower, args.Term)
+		//	changeFlag = true
+		//}else{
+		//	rf.CurTerm = args.Term
+		//}
+		rf.RoleChange(Follower, args.Term)
+		rf.VoteState = Lose
+		rf.Support = args.LeaderId
+		changeFlag = true
 		fallthrough
 	case args.Term == rf.CurTerm:
 		if !changeFlag {
@@ -862,6 +869,9 @@ func (rf *Raft) sendAllHeartbeat() { // 2D
 			reply := AppendEntriesReply{}
 			go rf.sendAppendEntries(i, &args, &reply, &tempNum)
 		} else if rf.PeersInfo[i].NextIndex <= rf.LastIncludedIndex { // 暂时... 要发的下一个日志包含在快照中
+			rf.Info("Peers %d 's NextIndex: %d", i, rf.PeersInfo[i].NextIndex)
+			rf.Info("len rfLogs: %d", len(rf.Logs))
+			rf.Info("server %d, match index: %d", i, rf.PeersInfo[i].MatchIndex)
 			args := SnapShotArgs{
 				Term:              rf.CurTerm,
 				LeaderId:          rf.me,

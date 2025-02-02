@@ -1218,13 +1218,24 @@ func TestSnapshotInstall2D(t *testing.T) {
 }
 
 func TestSnapshotInstallUnreliable2D(t *testing.T) {
-	snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)",
-		true, false, false)
+	snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)", true, false, false)
+}
+
+func TestAllSnapUnreliable(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		snapcommon(t, "Test (2D): install snapshots (disconnect+unreliable)", true, false, false)
+	}
 }
 
 func TestSnapshotInstallCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
-	// 尚未创建快照的节点从快照中恢复时
+	// 尚未创建快照的节点从快照中恢复时出错
+}
+
+func TestAllSnapCrash(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		snapcommon(t, "Test (2D): install snapshots (crash)", false, true, true)
+	}
 }
 
 func TestSnapshotInstallUnCrash2D(t *testing.T) {
