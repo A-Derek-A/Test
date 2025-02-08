@@ -347,15 +347,19 @@ func (rf *Raft) ApplyLogs() {
 				}
 				rf.Success("submit the command %d", ind)
 			}
-		} else { // 日志已经被存成快照了
-			rf.applyCh <- ApplyMsg{
-				CommandValid:  false,
-				SnapshotValid: true,
-				SnapshotIndex: rf.LastIncludedIndex,
-				SnapshotTerm:  rf.LastIncludedTerm,
-				Snapshot:      rf.persister.ReadSnapshot(),
-			}
 		}
+
+		//这里不需要安装快照
+		//else { // 日志已经被存成快照了
+		//	rf.applyCh <- ApplyMsg{
+		//		CommandValid:  false,
+		//		SnapshotValid: true,
+		//		SnapshotIndex: rf.LastIncludedIndex,
+		//		SnapshotTerm:  rf.LastIncludedTerm,
+		//		Snapshot:      rf.persister.ReadSnapshot(),
+		//	}
+		//}
+
 		//for i := rf.ApplyPoint; i < rf.CommittedIndex; i++ { // ApplyPoint不断变化而且没加上锁，可能导致race问题
 		//	//rf.ApplyMu.Lock()
 		//	rf.applyCh <- ApplyMsg{ // 涉及提交
