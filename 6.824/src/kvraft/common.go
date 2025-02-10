@@ -1,9 +1,15 @@
 package kvraft
 
 const (
+	// 需要经过Raft层给出的Err
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeOut     = "ErrTimeOut"
+
+	// Server 可以直接判断的Err
+	ErrOutDate = "ErrOutDate"
+	Waiting    = "Waiting"
 )
 
 type Err string
@@ -24,9 +30,21 @@ type PutAppendReply struct {
 	Err Err
 }
 
-type GetArgs struct {
-	Key   string
+type RaftReply struct {
 	MsgId int64
+	Key   string
+	Value string
+	// Raft 信息
+	Term   int
+	Index  int
+	Leader int
+	Err    Err
+}
+
+type GetArgs struct {
+	Key      string
+	MsgId    int64
+	ClientId int64
 	// You'll have to add definitions here.
 }
 
