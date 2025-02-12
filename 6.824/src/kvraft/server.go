@@ -112,7 +112,14 @@ func (kv *KVServer) RaftApplyServer() {
 		if m.CommandValid == false { // 不是Command
 			// ignore other types of ApplyMsg
 		} else { // Command命令
-			op := m.Command.(Op)
+			var op Op
+			if _, ok := m.Command.(string); ok {
+				util.Info("New Term")
+				continue
+			} else if op, ok = m.Command.(Op); ok {
+				util.Info("RaftReply: %v.", op)
+			}
+
 			kv.mu.Lock()
 			rr := RaftReply{
 				MsgId: op.MsgId,

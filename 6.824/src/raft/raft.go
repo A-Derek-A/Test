@@ -710,8 +710,12 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 				if rf.Role == Leader {
 					return true
 				}
-				rf.RoleChange(Leader, rf.CurTerm)
+				rf.RoleChange(Leader, rf.CurTerm) // 在选出Leader后发送一个新的空日志。
 				rf.sendAllHeartbeat()
+				rf.Logs = append(rf.Logs, Entry{
+					Term:    rf.CurTerm,
+					Command: "Null",
+				})
 				*num = 0
 			}
 		}
