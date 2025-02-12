@@ -56,25 +56,35 @@ func (ck *Clerk) Get(key string) string {
 		args := GetArgs{
 			// MsgId:    ck.MsgId, message id 在GET时似乎没用
 			// ClientId: ck.ClientId,
-			Key: key,
+			Key:      key,
+			MsgId:    ck.MsgId,
+			ClientId: ck.ClientId,
 		}
 		reply := GetReply{}
 
 		ok := ck.servers[(ck.NowLeader+offset)%len(ck.servers)].Call("KVServer.Get", &args, &reply)
 		if !ok { // 网络错误则使用
 			util.Info("Error occurred in Get PRC")
-			time.Sleep(time.Millisecond * 50)
+			offset++
+			if offset%len(ck.servers) == 0 {
+				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
+				time.Sleep(time.Millisecond * 500)
+				// util.Info("wake")
+			} else {
+				time.Sleep(time.Millisecond * 10)
+			}
+			// time.Sleep(time.Millisecond * 10)
 			continue
 		}
 		//fmt.Printf("args: %v, reply: %v\n", args, reply)
 		if reply.Err == ErrWrongLeader { // 回复并非Leader
-			util.Info("Wrong Leader %d, we expect next one.", ck.NowLeader+offset)
+			util.Info("Get:Wrong Leader %d, we expect next one.", (ck.NowLeader+offset)%len(ck.servers))
 			offset++
 			if offset%len(ck.servers) == 0 {
-				util.Info("The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Second)
+				util.Info("Get:The Cluster may be not available now, wait a second.")
+				time.Sleep(time.Millisecond * 500)
 			} else {
-				time.Sleep(time.Millisecond * 50)
+				time.Sleep(time.Millisecond * 10)
 			}
 			continue
 		}
@@ -83,7 +93,7 @@ func (ck *Clerk) Get(key string) string {
 			ck.MsgState = true
 			return reply.Value
 		}
-		time.Sleep(time.Millisecond * 50)
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 
@@ -99,6 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	offset := 0
 	for {
+		util.Info("begin")
 		if ck.MsgState == true {
 			atomic.AddInt64(&ck.MsgId, 1)
 			//ck.MsgId = GenerateMsgId()
@@ -115,28 +126,39 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		ok := ck.servers[(ck.NowLeader+offset)%len(ck.servers)].Call("KVServer.PutAppend", &args, &reply)
 		if !ok { // 网络错误则使用
-			util.Info("Error occurred in PutAppend PRC")
-			time.Sleep(time.Millisecond * 50)
+			util.Info("PutAppend:Error occurred in PutAppend PRC")
+			offset++
+			if offset%len(ck.servers) == 0 {
+				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
+				time.Sleep(time.Millisecond * 500)
+				// util.Info("wake")
+			} else {
+				time.Sleep(time.Millisecond * 10)
+			}
+			// time.Sleep(time.Millisecond * 10)
 			continue
 		}
 		//fmt.Printf("args: %v, reply: %v\n", args, reply)
 		if reply.Err == ErrWrongLeader { // 回复并非Leader
-			util.Info("Wrong Leader %d, we expect next one.", ck.NowLeader+offset)
+			util.Info("PutAppend:Wrong Leader %d, we expect next one.", (ck.NowLeader+offset)%len(ck.servers))
 			offset++
 			if offset%len(ck.servers) == 0 {
-				util.Info("The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Second)
+				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
+				time.Sleep(time.Millisecond * 500)
+				// util.Info("wake")
 			} else {
-				time.Sleep(time.Millisecond * 50)
+				time.Sleep(time.Millisecond * 10)
 			}
 			continue
-		}
-		if reply.Err == OK || reply.Err == ErrNoKey { // 有值成功和无值返回空都应认为成功
+		} else if reply.Err == OK || reply.Err == ErrNoKey { // 有值成功和无值返回空都应认为成功
 			ck.NowLeader = (ck.NowLeader + offset) % len(ck.servers) // offset 作为临时变量不置0
 			ck.MsgState = true
 			return
+		} else {
+			util.Warning("reply: %v", reply)
 		}
-		time.Sleep(time.Millisecond * 50)
+
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 

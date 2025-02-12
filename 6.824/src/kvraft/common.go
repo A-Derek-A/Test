@@ -5,7 +5,6 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	ErrTimeOut     = "ErrTimeOut"
 
 	// Server 可以直接判断的Err
 	ErrOutDate = "ErrOutDate"
@@ -35,10 +34,8 @@ type RaftReply struct {
 	Key   string
 	Value string
 	// Raft 信息
-	Term   int
-	Index  int
-	Leader int
-	Err    Err
+	Index int
+	Err   Err
 }
 
 type GetArgs struct {

@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	util "6.824/utils"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ type Op struct {
 	Value    string
 	ClientId int64 // 该命令来自哪个客户端
 	MsgId    int64
+	From     int // 该条命令来自哪一个服务器
 }
 
 type KVServer struct {
@@ -48,32 +50,39 @@ type KVServer struct {
 }
 
 func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
+	util.Info("Now in SubmitToRaft")
 	_, _, isLeader := kv.rf.Start(cmd)
 	if !isLeader {
 		rr.Err = ErrWrongLeader
 		rr.Value = ""
 		return rr
 	}
-
+	util.Info("Start building channel, and command : %v", cmd)
 	kv.mu.Lock()
-	if kv.MsgChan[cmd.MsgId] == nil { // 重复的MsgId的请求都被拦在了Get 或 PutAppend函数中，管道只会创建一次
-		kv.MsgChan[cmd.MsgId] = make(chan RaftReply, 1)
+	if kv.MsgChan[cmd.ClientId] == nil { // 重复的ClientId的请求都被拦在了Get 或 PutAppend函数中，管道只会创建一次
+		kv.MsgChan[cmd.ClientId] = make(chan RaftReply, 1)
 	}
 	kv.mu.Unlock()
-	ticker := time.NewTicker(kv.Timeout)
-
+	// ticker := time.NewTicker(kv.Timeout)
+	// ticker.Reset(kv.Timeout)
+	util.Info("SubmitToRaft start an ticker")
 	select {
-	case <-ticker.C:
+	case <-time.After(kv.Timeout):
 		rr.Err = ErrWrongLeader
 		rr.Key = cmd.Key
 		rr.Value = cmd.Value
 		rr.MsgId = cmd.MsgId
+		kv.mu.Lock()
+		kv.LastMsg[cmd.ClientId] = rr // 可能还有滞留在网络中的请求来访问改节点，所以将来节点的最新纪录改为非Leader错误
+		kv.mu.Unlock()
 	case temp := <-kv.MsgChan[cmd.ClientId]: // 一条Raft处理过，Server应用后的消息到了
-		if temp.Err == OK {
-
-		}
+		rr = temp
+		util.Trace("channel message: %v", temp)
+		kv.mu.Lock()
+		kv.LastMsg[cmd.ClientId] = temp
+		kv.mu.Unlock()
 	}
-
+	util.Info("waiting a Lock")
 	kv.mu.Lock()
 	close(kv.MsgChan[cmd.ClientId])
 	delete(kv.MsgChan, cmd.ClientId)
@@ -82,6 +91,7 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 }
 func (kv *KVServer) RaftApplyServer() {
 	for m := range kv.applyCh {
+		util.Trace("m: %+v", m)
 		if m.CommandValid == false { // 不是Command
 			// ignore other types of ApplyMsg
 		} else { // Command命令
@@ -92,6 +102,7 @@ func (kv *KVServer) RaftApplyServer() {
 				Key:   op.Key,
 				Value: op.Value,
 				Err:   OK,
+				Index: m.CommandIndex,
 			}
 			if op.Type == "Get" {
 				value, exist := kv.cache[op.Key]
@@ -111,9 +122,11 @@ func (kv *KVServer) RaftApplyServer() {
 					kv.cache[op.Key] = op.Value
 				}
 			}
-
-			kv.MsgChan[op.ClientId] <- kv.LastMsg[op.ClientId]
 			kv.mu.Unlock()
+			if op.From == kv.me { // op.From 是当时发命令的Leader 就是自己，即使现在可能不是，但因为已经提交了，所以命令肯定执行成功所以需要将消息返回给Channel
+				// 但很显然这样没有考虑到，如果一个Server发生网络分区或者Crash，那么它就收的很可能都是以前的Cmd，在换Leader的情况下是可行的
+				kv.MsgChan[op.ClientId] <- rr // 即使Server已经不是Leader，对于它在Leader任期内已经处理并提交的请求，应该回复。
+			}
 		}
 	}
 }
@@ -143,6 +156,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 			Value:    "",
 			ClientId: args.ClientId,
 			MsgId:    args.MsgId,
+			From:     kv.me,
 		}
 		kv.LastMsg[args.ClientId] = RaftReply{ // 如果Raft认为自己是Leader节点，那么先
 			MsgId: args.MsgId,
@@ -154,6 +168,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 		Result := kv.SubmitToRaft(Command)
 		reply.Err = Result.Err
 		reply.Value = Result.Value
+		kv.mu.Lock()
+		if Result.Err == ErrWrongLeader {
+			delete(kv.LastMsg, args.ClientId)
+		}
+		kv.mu.Unlock()
 	}
 }
 
@@ -170,12 +189,14 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = val.Err // 对于相等的有两种情况，一是Waiting，即已经在向Raft请求了，二是各种Error包括Ok
 		kv.mu.Unlock()
 	} else { // 不存在 或 请求消息更新
+		//util.Info("Server-PutAppend: MsgId: %d", args.MsgId)
 		Command := Op{
 			Type:     args.Op,
 			Key:      args.Key,
 			Value:    args.Value,
 			ClientId: args.ClientId,
 			MsgId:    args.MsgId,
+			From:     kv.me,
 		}
 		kv.LastMsg[args.ClientId] = RaftReply{
 			MsgId: args.MsgId,
@@ -186,6 +207,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		Result := kv.SubmitToRaft(Command)
 		reply.Err = Result.Err
+		kv.mu.Lock()
+		if Result.Err == ErrWrongLeader {
+			delete(kv.LastMsg, args.ClientId)
+		}
+		kv.mu.Unlock()
 	}
 }
 
@@ -236,7 +262,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.MsgChan = make(map[int64]chan RaftReply)
 	kv.LastMsg = make(map[int64]RaftReply)
 	kv.cache = make(map[string]string)
-	kv.Timeout = 2 * time.Second
+	kv.Timeout = 3 * time.Second
+	go kv.RaftApplyServer()
 	// You may need initialization code here.
 
 	return kv

@@ -1054,7 +1054,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		Support:   -1,
 		VoteState: Have,
 		Role:      Follower,
-		Heart:     50 * time.Millisecond,
+		Heart:     10 * time.Millisecond,
 		Period:    time.Duration(500+rand.Intn(200)) * time.Millisecond,
 		Logs:      make([]Entry, 1), //假设存在一个哨兵节点
 		PeersInfo: make([]PInfo, 0),
