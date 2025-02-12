@@ -344,6 +344,7 @@ func (rf *Raft) ApplyLogs() {
 					CommandValid: true,
 					Command:      v.Command,
 					CommandIndex: ind,
+					SnapshotTerm: v.Term,
 				}
 				rf.Success("submit the command %d", ind)
 			}

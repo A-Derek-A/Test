@@ -35,6 +35,7 @@ type RaftReply struct {
 	Value string
 	// Raft 信息
 	Index int
+	Term  int
 	Err   Err
 }
 
