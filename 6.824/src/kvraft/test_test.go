@@ -556,9 +556,15 @@ func TestManyPartitionsOneClient3A(t *testing.T) {
 	GenericTest(t, "3A", 1, 5, false, false, true, -1, false)
 }
 
-func TestManyPartitionsManyClients3A(t *testing.T) {
+func TestManyPartitionsManyClients3A(t *testing.T) { // unreliable会让测试失败。
 	// Test: partitions, many clients (3A) ...
 	GenericTest(t, "3A", 5, 5, false, false, true, -1, false)
+}
+
+func TestRangeManyPartitionsManyClients(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		GenericTest(t, "3A", 5, 5, false, false, true, -1, false)
+	}
 }
 
 func TestPersistOneClient3A(t *testing.T) {
@@ -591,12 +597,10 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	GenericTest(t, "3A", 15, 7, true, true, true, -1, true)
 }
 
-//
 // if one server falls behind, then rejoins, does it
 // recover by using the InstallSnapshot RPC?
 // also checks that majority discards committed log entries
 // even if minority doesn't respond.
-//
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000

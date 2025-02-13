@@ -39,10 +39,11 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	MsgChan map[int64]chan RaftReply // 该管道是Raft给对应的ClientId的消息，server将该消息保存到LastMsg中
-	LastMsg map[int64]RaftReply      // LastMsg 保存最新的ClientId的消息
-	cache   map[string]string        // 存储具体键值的Map
-	Timeout time.Duration            // 超时Raft提交成功超时倒计时
+	MsgChan  map[int64]chan RaftReply // 该管道是Raft给对应的ClientId的消息，server将该消息保存到LastMsg中
+	LastMsg  map[int64]RaftReply      // LastMsg 保存最新的ClientId的消息
+	RollBack map[int64]RaftReply      // 用于回退最新的LastMsg
+	cache    map[string]string        // 存储具体键值的Map
+	Timeout  time.Duration            // 超时Raft提交成功超时倒计时
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -69,7 +70,6 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 	util.Info("SubmitToRaft start an ticker")
 	exit := false
 	for {
-
 		select {
 		case <-time.After(kv.Timeout):
 			rr.Err = ErrWrongLeader
@@ -89,9 +89,10 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 			rr = temp
 			util.Trace("channel message: %v", temp)
 			util.Success("channel message >>> Err: %v, MsgId: %v, Key: %v, Value: %v, Index: %v, Term: %v", temp.Err, temp.MsgId, temp.Key, temp.Value, temp.Index, temp.Term)
-			kv.mu.Lock()
-			kv.LastMsg[cmd.ClientId] = temp
-			kv.mu.Unlock()
+			// 在其他的Server中没有，如果这个没有发送成功，那么在重新选Leader后，客户端重新发送了一条命令，这是不可行的。
+			//kv.mu.Lock()
+			//kv.LastMsg[cmd.ClientId] = temp
+			//kv.mu.Unlock()
 			exit = true
 		}
 		if exit {
@@ -147,6 +148,12 @@ func (kv *KVServer) RaftApplyServer() {
 					kv.cache[op.Key] = op.Value
 				}
 			}
+			val, exi := kv.LastMsg[op.ClientId]
+			if exi && val.MsgId < op.MsgId {
+				kv.RollBack[op.ClientId] = val
+			}
+			kv.LastMsg[op.ClientId] = rr
+
 			kv.mu.Unlock()
 			if op.From == kv.me && kv.MsgChan[op.ClientId] != nil { // op.From 是当时发命令的Leader 就是自己，即使现在可能不是，但因为已经提交了，所以命令肯定执行成功所以需要将消息返回给Channel
 				// 但很显然这样没有考虑到，如果一个Server发生网络分区或者Crash，那么它就收的很可能都是以前的Cmd，在换Leader的情况下是可行的
@@ -183,6 +190,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 			MsgId:    args.MsgId,
 			From:     kv.me,
 		}
+		if exs {
+			kv.RollBack[args.ClientId] = val
+		}
 		kv.LastMsg[args.ClientId] = RaftReply{ // 如果Raft认为自己是Leader节点，那么先
 			MsgId: args.MsgId,
 			Key:   args.Key,
@@ -196,7 +206,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 		reply.Value = Result.Value
 		kv.mu.Lock()
 		if Result.Err == ErrWrongLeader {
-			delete(kv.LastMsg, args.ClientId)
+			if exs {
+				kv.LastMsg[args.ClientId] = kv.RollBack[args.ClientId]
+			} else {
+				delete(kv.LastMsg, args.ClientId)
+			}
 		}
 		kv.mu.Unlock()
 	}
@@ -229,6 +243,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			MsgId:    args.MsgId,
 			From:     kv.me,
 		}
+		if exs {
+			kv.RollBack[args.ClientId] = val
+		}
 		kv.LastMsg[args.ClientId] = RaftReply{
 			MsgId: args.MsgId,
 			Key:   args.Key,
@@ -241,7 +258,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 		kv.mu.Lock()
 		if Result.Err == ErrWrongLeader {
-			delete(kv.LastMsg, args.ClientId)
+			if exs {
+				kv.LastMsg[args.ClientId] = kv.RollBack[args.ClientId]
+			} else {
+				delete(kv.LastMsg, args.ClientId)
+			}
 		}
 		kv.mu.Unlock()
 	}
@@ -294,6 +315,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.MsgChan = make(map[int64]chan RaftReply)
 	kv.LastMsg = make(map[int64]RaftReply)
 	kv.cache = make(map[string]string)
+	kv.RollBack = make(map[int64]RaftReply)
 	kv.Timeout = 5 * time.Second
 	go kv.RaftApplyServer()
 	// You may need initialization code here.

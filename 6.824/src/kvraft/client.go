@@ -68,7 +68,7 @@ func (ck *Clerk) Get(key string) string {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 100)
 				// util.Info("wake")
 			} else {
 				time.Sleep(time.Millisecond * 10)
@@ -82,7 +82,7 @@ func (ck *Clerk) Get(key string) string {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("Get:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 100)
 			} else {
 				time.Sleep(time.Millisecond * 10)
 			}
@@ -130,7 +130,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 10)
 				// util.Info("wake")
 			} else {
 				time.Sleep(time.Millisecond * 10)
