@@ -28,7 +28,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.MsgId = 0
+	ck.MsgId = 1
 	ck.ClientId = nrand()
 	// You'll have to add code here.
 	return ck
@@ -68,7 +68,7 @@ func (ck *Clerk) Get(key string) string {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 50)
 				// util.Info("wake")
 			} else {
 				time.Sleep(time.Millisecond * 10)
@@ -82,7 +82,7 @@ func (ck *Clerk) Get(key string) string {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("Get:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 50)
 			} else {
 				time.Sleep(time.Millisecond * 10)
 			}
@@ -130,7 +130,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 50)
 				// util.Info("wake")
 			} else {
 				time.Sleep(time.Millisecond * 10)
@@ -144,7 +144,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			offset++
 			if offset%len(ck.servers) == 0 {
 				util.Info("PutAppend:The Cluster may be not available now, wait a second.")
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(time.Millisecond * 50)
 				// util.Info("wake")
 			} else {
 				time.Sleep(time.Millisecond * 10)

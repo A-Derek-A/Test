@@ -58,7 +58,7 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 		rr.Value = ""
 		return rr
 	}
-	util.Info("Start building channel, and command : %v", cmd)
+	util.Info("Start building channel, and command : me:%v %v", kv.me, cmd)
 	kv.mu.Lock()
 	if kv.MsgChan[cmd.ClientId] == nil { // 重复的ClientId的请求都被拦在了Get 或 PutAppend函数中，管道只会创建一次
 		kv.MsgChan[cmd.ClientId] = make(chan RaftReply, 1)
@@ -77,9 +77,9 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 			rr.Key = cmd.Key
 			rr.Value = cmd.Value
 			rr.MsgId = cmd.MsgId
-			kv.mu.Lock()
-			kv.LastMsg[cmd.ClientId] = rr // 可能还有滞留在网络中的请求来访问改节点，所以将来节点的最新纪录改为非Leader错误
-			kv.mu.Unlock()
+			//kv.mu.Lock()
+			//kv.LastMsg[cmd.ClientId] = rr // 可能还有滞留在网络中的请求来访问改节点，所以将来节点的最新纪录改为非Leader错误
+			//kv.mu.Unlock()
 			exit = true
 		case temp := <-kv.MsgChan[cmd.ClientId]: // 一条Raft处理过，Server应用后的消息到了
 			if temp.Term != term {
@@ -87,11 +87,11 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 				continue
 			}
 			rr = temp
-			util.Trace("channel message: %v", temp)
-			util.Success("channel message >>> Err: %v, MsgId: %v, Key: %v, Value: %v, Index: %v, Term: %v", temp.Err, temp.MsgId, temp.Key, temp.Value, temp.Index, temp.Term)
-			kv.mu.Lock()
-			kv.LastMsg[cmd.ClientId] = temp
-			kv.mu.Unlock()
+			//util.Trace("channel message: %v", temp)
+			//util.Success("channel message >>> Err: %v, MsgId: %v, Key: %v, Value: %v, Index: %v, Term: %v", temp.Err, temp.MsgId, temp.Key, temp.Value, temp.Index, temp.Term)
+			//kv.mu.Lock()
+			//kv.LastMsg[cmd.ClientId] = temp
+			//kv.mu.Unlock()
 			exit = true
 		}
 		if exit {
@@ -100,10 +100,11 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 	}
 
 	util.Info("waiting a Lock")
-	kv.mu.Lock()
-	close(kv.MsgChan[cmd.ClientId])
-	delete(kv.MsgChan, cmd.ClientId)
-	kv.mu.Unlock()
+	// 不是leader了，不应该返回
+	_, isLeader = kv.rf.GetState()
+	if !isLeader {
+		rr.Err = ErrWrongLeader
+	}
 	return rr
 }
 func (kv *KVServer) RaftApplyServer() {
@@ -112,7 +113,14 @@ func (kv *KVServer) RaftApplyServer() {
 		if m.CommandValid == false { // 不是Command
 			// ignore other types of ApplyMsg
 		} else { // Command命令
-			op := m.Command.(Op)
+			var op Op
+			if _, ok := m.Command.(string); ok {
+				util.Info("New Term")
+				continue
+			} else if op, ok = m.Command.(Op); ok {
+				util.Info("RaftReply: %v.", op)
+			}
+
 			kv.mu.Lock()
 			rr := RaftReply{
 				MsgId: op.MsgId,
@@ -121,6 +129,11 @@ func (kv *KVServer) RaftApplyServer() {
 				Err:   OK,
 				Index: m.CommandIndex,
 				Term:  m.SnapshotTerm,
+			}
+			// 不要重复
+			if kv.LastMsg[op.ClientId].MsgId == op.MsgId {
+				kv.mu.Unlock()
+				continue
 			}
 			if op.Type == "Get" {
 				value, exist := kv.cache[op.Key]
@@ -140,11 +153,16 @@ func (kv *KVServer) RaftApplyServer() {
 					kv.cache[op.Key] = op.Value
 				}
 			}
-			kv.mu.Unlock()
+			kv.LastMsg[op.ClientId] = rr
 			if op.From == kv.me && kv.MsgChan[op.ClientId] != nil { // op.From 是当时发命令的Leader 就是自己，即使现在可能不是，但因为已经提交了，所以命令肯定执行成功所以需要将消息返回给Channel
 				// 但很显然这样没有考虑到，如果一个Server发生网络分区或者Crash，那么它就收的很可能都是以前的Cmd，在换Leader的情况下是可行的
-				kv.MsgChan[op.ClientId] <- rr // 即使Server已经不是Leader，对于它在Leader任期内已经处理并提交的请求，应该回复。
+				currentTerm, isLeader := kv.rf.GetState()
+				if isLeader && m.SnapshotTerm == currentTerm {
+					kv.MsgChan[op.ClientId] <- rr // 即使Server已经不是Leader，对于它在Leader任期内已经处理并提交的请求，应该回复。
+					delete(kv.MsgChan, op.ClientId)
+				}
 			}
+			kv.mu.Unlock()
 		}
 	}
 }
@@ -176,12 +194,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 			MsgId:    args.MsgId,
 			From:     kv.me,
 		}
-		kv.LastMsg[args.ClientId] = RaftReply{ // 如果Raft认为自己是Leader节点，那么先
-			MsgId: args.MsgId,
-			Key:   args.Key,
-			Value: "",
-			Err:   Waiting,
-		}
+		//kv.LastMsg[args.ClientId] = RaftReply{ // 如果Raft认为自己是Leader节点，那么先
+		//	MsgId: args.MsgId,
+		//	Key:   args.Key,
+		//	Value: "",
+		//	Err:   Waiting,
+		//}
 		kv.mu.Unlock()
 
 		Result := kv.SubmitToRaft(Command)
@@ -189,7 +207,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) { // 首先得确认自�
 		reply.Value = Result.Value
 		kv.mu.Lock()
 		if Result.Err == ErrWrongLeader {
-			delete(kv.LastMsg, args.ClientId)
+			//delete(kv.LastMsg, args.ClientId)
 		}
 		kv.mu.Unlock()
 	}
@@ -222,19 +240,19 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			MsgId:    args.MsgId,
 			From:     kv.me,
 		}
-		kv.LastMsg[args.ClientId] = RaftReply{
-			MsgId: args.MsgId,
-			Key:   args.Key,
-			Value: args.Value,
-			Err:   Waiting,
-		}
+		//kv.LastMsg[args.ClientId] = RaftReply{
+		//	MsgId: args.MsgId,
+		//	Key:   args.Key,
+		//	Value: args.Value,
+		//	Err:   Waiting,
+		//}
 		kv.mu.Unlock()
 		Result := kv.SubmitToRaft(Command)
 		reply.Err = Result.Err
 
 		kv.mu.Lock()
 		if Result.Err == ErrWrongLeader {
-			delete(kv.LastMsg, args.ClientId)
+			//delete(kv.LastMsg, args.ClientId)
 		}
 		kv.mu.Unlock()
 	}
@@ -287,7 +305,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.MsgChan = make(map[int64]chan RaftReply)
 	kv.LastMsg = make(map[int64]RaftReply)
 	kv.cache = make(map[string]string)
-	kv.Timeout = 5 * time.Second
+	kv.Timeout = 2 * time.Second
 	go kv.RaftApplyServer()
 	// You may need initialization code here.
 
