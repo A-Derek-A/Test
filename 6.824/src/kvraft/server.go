@@ -39,11 +39,11 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	MsgChan  map[int64]chan RaftReply // 该管道是Raft给对应的ClientId的消息，server将该消息保存到LastMsg中
-	LastMsg  map[int64]RaftReply      // LastMsg 保存最新的ClientId的消息
-	RollBack map[int64]RaftReply      // 用于回退最新的LastMsg
-	cache    map[string]string        // 存储具体键值的Map
-	Timeout  time.Duration            // 超时Raft提交成功超时倒计时
+	MsgChan  map[int64]*chan RaftReply // 该管道是Raft给对应的ClientId的消息，server将该消息保存到LastMsg中
+	LastMsg  map[int64]RaftReply       // LastMsg 保存最新的ClientId的消息
+	RollBack map[int64]RaftReply       // 用于回退最新的LastMsg
+	cache    map[string]string         // 存储具体键值的Map
+	Timeout  time.Duration             // 超时Raft提交成功超时倒计时
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -61,8 +61,10 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 	}
 	util.Info("Start building channel, and command : %v", cmd)
 	kv.mu.Lock()
+	var t chan RaftReply
 	if kv.MsgChan[int64(ind)] == nil { // 重复的ClientId的请求都被拦在了Get 或 PutAppend函数中，管道只会创建一次
-		kv.MsgChan[int64(ind)] = make(chan RaftReply, 1)
+		t = make(chan RaftReply, 1)
+		kv.MsgChan[int64(ind)] = &t
 	} else {
 		rr.Err = Waiting
 		return rr
@@ -77,14 +79,14 @@ func (kv *KVServer) SubmitToRaft(cmd Op) (rr RaftReply) {
 		rr.Key = cmd.Key
 		rr.Value = cmd.Value
 		rr.MsgId = cmd.MsgId
-	case temp := <-kv.MsgChan[int64(ind)]: // 一条Raft处理过，Server应用后的消息到了
+	case temp := <-t: // 一条Raft处理过，Server应用后的消息到了
 		rr = temp
 		util.Success("channel message >>> Err: %v, MsgId: %v, Key: %v, Value: %v, Index: %v, Term: %v", temp.Err, temp.MsgId, temp.Key, temp.Value, temp.Index, temp.Term)
 	}
 
 	util.Info("waiting a Lock")
 	kv.mu.Lock()
-	close(kv.MsgChan[int64(ind)])
+	close(t)
 	delete(kv.MsgChan, int64(ind))
 	kv.mu.Unlock()
 	return rr
@@ -140,7 +142,8 @@ func (kv *KVServer) RaftApplyServer() {
 			}
 			if op.From == kv.me && kv.MsgChan[int64(m.CommandIndex)] != nil { // op.From 是当时发命令的Leader 就是自己，即使现在可能不是，但因为已经提交了，所以命令肯定执行成功所以需要将消息返回给Channel
 				// 但很显然这样没有考虑到，如果一个Server发生网络分区或者Crash，那么它就收的很可能都是以前的Cmd，在换Leader的情况下是可行的
-				kv.MsgChan[int64(m.CommandIndex)] <- rr // 即使Server已经不是Leader，对于它在Leader任期内已经处理并提交的请求，应该回复。
+				ch := kv.MsgChan[int64(m.CommandIndex)] // 即使Server已经不是Leader，对于它在Leader任期内已经处理并提交的请求，应该回复。
+				*ch <- rr
 			}
 			kv.mu.Unlock()
 		}
@@ -232,7 +235,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	kv.MsgChan = make(map[int64]chan RaftReply)
+	kv.MsgChan = make(map[int64]*chan RaftReply)
 	kv.LastMsg = make(map[int64]RaftReply)
 	kv.cache = make(map[string]string)
 	kv.RollBack = make(map[int64]RaftReply)

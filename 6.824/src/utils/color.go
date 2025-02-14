@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const Debug = true
+const Debug = false
 
 const (
 	color_red = uint8(iota + 91)
