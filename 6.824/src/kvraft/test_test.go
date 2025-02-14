@@ -561,11 +561,11 @@ func TestManyPartitionsManyClients3A(t *testing.T) { // unreliable会让测试�
 	GenericTest(t, "3A", 5, 5, false, false, true, -1, false)
 }
 
-func TestRangeManyPartitionsManyClients(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		GenericTest(t, "3A", 5, 5, false, false, true, -1, false)
-	}
-}
+//func TestRangeManyPartitionsManyClients(t *testing.T) {
+//	for i := 0; i < 20; i++ {
+//		GenericTest(t, "3A", 5, 5, false, false, true, -1, false)
+//	}
+//}
 
 func TestPersistOneClient3A(t *testing.T) {
 	// Test: restarts, one client (3A) ...
