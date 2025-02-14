@@ -34,7 +34,9 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	maxraftstate int // snapshot if log grows this big
+	LastMsg      map[int64]RaftReply // 用于保存最新的数据，key为Client Id
+	WaitLog      map[int64]RaftReply // 用于交付给请求，key为Start Index
+	maxraftstate int                 // snapshot if log grows this big
 
 	// Your definitions here.
 }

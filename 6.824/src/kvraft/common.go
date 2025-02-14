@@ -34,3 +34,10 @@ type GetReply struct {
 	Err   Err
 	Value string
 }
+
+type RaftReply struct {
+	MgsId    int64
+	ClientId int64
+	Key      string
+	Value    string
+}
