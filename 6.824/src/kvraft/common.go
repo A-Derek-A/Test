@@ -50,3 +50,8 @@ type GetReply struct {
 	Err   Err
 	Value string
 }
+
+type Pair struct {
+	MsgId    int64
+	ClientId int64
+}
